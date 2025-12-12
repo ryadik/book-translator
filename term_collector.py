@@ -2,7 +2,7 @@ import json
 import os
 import re
 from typing import Dict, Any, Optional
-from .logger import system_logger
+from logger import system_logger
 
 def collect_and_deduplicate_terms(workspace_paths: dict) -> Dict[str, Any]:
     terms_dir = workspace_paths.get("terms")

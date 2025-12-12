@@ -1,14 +1,10 @@
 import argparse
 import os
 import sys
-import logging
 
-# Добавляем корневую директорию проекта (родителя 'translator') в путь,
-# чтобы можно было использовать абсолютные импорты от 'translator'.
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from translator.logger import setup_loggers, system_logger
-from translator import orchestrator
+# Логгер и оркестратор теперь импортируются напрямую
+import orchestrator
+from logger import setup_loggers, system_logger
 
 def main():
     parser = argparse.ArgumentParser(description='Запускает процесс перевода для указанной главы.', formatter_class=argparse.RawTextHelpFormatter)
@@ -18,6 +14,7 @@ def main():
     parser.add_argument('--force-split', action='store_true', help='Принудительно удалить существующую рабочую директорию и начать с этапа разделения.')
     args = parser.parse_args()
 
+    # Эта проверка использует print, так как логгер еще не настроен с файловым хендлером.
     if not os.path.exists(args.chapter_file) or not os.path.isfile(args.chapter_file):
         print(f"Ошибка: Файл не найден или путь не является файлом: {args.chapter_file}")
         sys.exit(1)

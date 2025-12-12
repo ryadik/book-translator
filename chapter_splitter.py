@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-from .logger import system_logger
+from logger import system_logger
 
 def split_chapter_intelligently(chapter_file_path, output_dir, target_chars=3000, max_part_chars=5000):
     """

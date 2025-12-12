@@ -8,13 +8,14 @@ import sys
 import uuid
 from typing import Dict, Any, List
 
-from .logger import setup_loggers, system_logger, input_logger, output_logger
-from . import config
-from . import chapter_splitter
-from . import task_manager
-from . import term_collector
+from logger import setup_loggers, system_logger, input_logger, output_logger
+import config
+import chapter_splitter
+import task_manager
+import term_collector
+import convert_to_docx
 
-def _run_workers_pooled(max_workers: int, tasks: List[str], prompt_template: str, step_paths: Dict[str, str], output_suffix: str, cli_args: Dict[str, Any], workspace_paths: Dict[str, Any], glossary_str: str = "", style_guide_str: str = ""):
+def _run_workers_pooled(max_workers: int, tasks: List[str], prompt_template: str, step_paths: Dict[str, str], output_suffix: str, cli_args: Dict[str, Any], workspace_paths: Dict[str, Any], glossary_str = "", style_guide_str = ""):
     active_processes = []
     task_queue = list(tasks)
     all_successful = True
@@ -27,6 +28,7 @@ def _run_workers_pooled(max_workers: int, tasks: List[str], prompt_template: str
             worker_id = uuid.uuid4().hex[:6]
             try:
                 in_progress_path = task_manager.move_task(task_path, step_paths["in_progress"])
+                
                 with open(in_progress_path, 'r', encoding='utf-8') as f:
                     chunk_content = f.read()
 
@@ -41,6 +43,7 @@ def _run_workers_pooled(max_workers: int, tasks: List[str], prompt_template: str
                     output_path = os.path.join(step_paths["done"], output_filename)
                 
                 command = ['gemini', '-p', final_prompt, '--output-format', cli_args.get('output_format', 'text')]
+
                 proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
                 active_processes.append({"process": proc, "in_progress_path": in_progress_path, "output_path": output_path, "id": worker_id, "is_term_discovery": output_suffix == ".json"})
                 system_logger.info(f"[Orchestrator] Запущен воркер [id: {worker_id}] для: {os.path.basename(in_progress_path)}")
@@ -75,7 +78,7 @@ def _run_workers_pooled(max_workers: int, tasks: List[str], prompt_template: str
                         output_logger.info(f"[{worker_id}] --- SUCCESSFUL OUTPUT FROM: {worker_name} ---\n{stdout_output}\n")
                     except Exception as e:
                         system_logger.error(f"[Orchestrator] Ошибка при записи вывода от воркера [id: {worker_id}]: {e}")
-                    
+
                     if p_info["is_term_discovery"]:
                         task_manager.move_task(p_info['in_progress_path'], step_paths["done"])
                     else:
@@ -142,7 +145,8 @@ def run_translation_process(chapter_file_path: str, cleanup: bool, resume: bool,
                 if input("Продолжить с пустым глоссарием? (y/n): ").lower() == 'y':
                     with open("data/glossary.json", 'w', encoding='utf-8') as f: f.write(glossary_content)
                 else: system_logger.info("Операция прервана пользователем."); return
-            with open("translator/prompts/term_discovery.txt", 'r', encoding='utf-8') as f: term_prompt_template = f.read()
+
+            with open("prompts/term_discovery.txt", 'r', encoding='utf-8') as f: term_prompt_template = f.read()
             
             pending_tasks = task_manager.get_pending_tasks(discovery_paths)
             if pending_tasks:
@@ -166,7 +170,7 @@ def run_translation_process(chapter_file_path: str, cleanup: bool, resume: bool,
         if not os.path.exists(translation_checkpoint):
             system_logger.info("\n--- ЭТАП 2: Перевод чанков ---")
             try:
-                with open("translator/prompts/translation.txt", 'r', encoding='utf-8') as f: translation_prompt_template = f.read()
+                with open("prompts/translation.txt", 'r', encoding='utf-8') as f: translation_prompt_template = f.read()
                 with open("data/glossary.json", 'r', encoding='utf-8') as f: glossary_content = f.read()
                 with open("data/style_guide.md", 'r', encoding='utf-8') as f: style_guide_content = f.read()
             except FileNotFoundError as e:
@@ -188,7 +192,7 @@ def run_translation_process(chapter_file_path: str, cleanup: bool, resume: bool,
         if not os.path.exists(reading_checkpoint):
             system_logger.info("\n--- ЭТАП 3: Вычитка текста ---")
             try:
-                with open("translator/prompts/proofreading.txt", 'r', encoding='utf-8') as f: proofreading_prompt_template = f.read()
+                with open("prompts/proofreading.txt", 'r', encoding='utf-8') as f: proofreading_prompt_template = f.read()
                 with open("data/glossary.json", 'r', encoding='utf-8') as f: glossary_content = f.read()
                 with open("data/style_guide.md", 'r', encoding='utf-8') as f: style_guide_content = f.read()
             except FileNotFoundError as e:
@@ -211,15 +215,27 @@ def run_translation_process(chapter_file_path: str, cleanup: bool, resume: bool,
         final_chunks.sort(key=lambda f: int(re.search(r'chunk_(\d+).txt', os.path.basename(f)).group(1)))
         
         input_dir = os.path.dirname(chapter_file_path)
-        final_output_path = os.path.join(input_dir, "ru.txt")
+        txt_output_path = os.path.join(input_dir, "ru.txt")
         
-        with open(final_output_path, 'w', encoding='utf-8') as final_file:
+        with open(txt_output_path, 'w', encoding='utf-8') as final_file:
             for i, chunk_path in enumerate(final_chunks):
                 with open(chunk_path, 'r', encoding='utf-8') as chunk_file:
                     final_file.write(chunk_file.read())
                 if i < len(final_chunks) - 1: final_file.write("\n\n")
 
-        system_logger.info(f"✅ Глава успешно переведена и собрана в файл: {final_output_path}")
+        system_logger.info(f"✅ Глава успешно переведена и собрана в файл: {txt_output_path}")
+        
+        # --- ЭТАП 4: ОПЦИОНАЛЬНАЯ КОНВЕРТАЦИЯ В DOCX ---
+        if input("\nКонвертировать итоговый файл в .docx? (y/n): ").lower() == 'y':
+            try:
+                docx_output_path = os.path.splitext(txt_output_path)[0] + ".docx"
+                convert_to_docx.convert_txt_to_docx(txt_output_path, docx_output_path)
+            except ImportError:
+                system_logger.error("\n--- ОШИБКА КОНВЕРТАЦИИ ---")
+                system_logger.error("Библиотека 'python-docx' не найдена.")
+                system_logger.error("Пожалуйста, установите ее командой: pip install -r requirements.txt")
+            except Exception as e:
+                system_logger.error(f"Произошла ошибка во время конвертации в .docx: {e}")
 
     except Exception as e:
         system_logger.critical(f"[Orchestrator] НЕПЕРЕХВАЧЕННАЯ КРИТИЧЕСКАЯ ОШИБКА: {e}", exc_info=True)

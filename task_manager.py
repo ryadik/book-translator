@@ -1,6 +1,6 @@
 import os
 import shutil
-from .logger import system_logger
+from logger import system_logger
 
 def setup_task_workspace(workspace_root: str, chapter_name: str) -> dict:
     base_dir = os.path.join(workspace_root, chapter_name)
