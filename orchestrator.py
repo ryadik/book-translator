@@ -15,7 +15,7 @@ import task_manager
 import term_collector
 import convert_to_docx
 
-def _run_workers_pooled(max_workers: int, tasks: List[str], prompt_template: str, step_paths: Dict[str, str], output_suffix: str, cli_args: Dict[str, Any], workspace_paths: Dict[str, Any], glossary_str = "", style_guide_str = ""):
+def _run_workers_pooled(max_workers: int, tasks: List[str], prompt_template: str, step_paths: Dict[str, str], output_suffix: str, cli_args: Dict[str, Any], workspace_paths: Dict[str, Any], model_name: str, glossary_str = "", style_guide_str = ""):
     active_processes = []
     task_queue = list(tasks)
     all_successful = True
@@ -42,10 +42,10 @@ def _run_workers_pooled(max_workers: int, tasks: List[str], prompt_template: str
                 else:
                     output_path = os.path.join(step_paths["done"], output_filename)
                 
-                command = ['gemini', '-p', final_prompt, '--output-format', cli_args.get('output_format', 'text')]
+                command = ['gemini', '-m', model_name, '-p', final_prompt, '--output-format', cli_args.get('output_format', 'text')]
 
                 proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
-                active_processes.append({"process": proc, "in_progress_path": in_progress_path, "output_path": output_path, "id": worker_id, "is_term_discovery": output_suffix == ".json"})
+                active_processes.append({"process": proc, "in_progress_path": in_progress_path, "output_path": output_path, "id": worker_id, "is_term_discovery": output_suffix == ".json", "start_time": time.time()})
                 system_logger.info(f"[Orchestrator] Запущен воркер [id: {worker_id}] для: {os.path.basename(in_progress_path)}")
 
             except Exception as e:
@@ -61,7 +61,11 @@ def _run_workers_pooled(max_workers: int, tasks: List[str], prompt_template: str
             worker_id = p_info["id"]
             if proc.poll() is not None:
                 worker_name = os.path.basename(p_info['in_progress_path'])
-                stdout_output, stderr_output = proc.communicate()
+                try:
+                    stdout_output, stderr_output = proc.communicate(timeout=120)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    stdout_output, stderr_output = proc.communicate()
                 
                 if proc.returncode != 0:
                     all_successful = False
@@ -84,6 +88,10 @@ def _run_workers_pooled(max_workers: int, tasks: List[str], prompt_template: str
                     else:
                         os.remove(p_info['in_progress_path'])
             else:
+                if time.time() - p_info["start_time"] > 120:
+                    system_logger.error(f"[Orchestrator] Воркер [id: {worker_id}] превысил лимит времени (120с). Принудительное завершение.")
+                    proc.kill()
+                    # It will be handled in the next iteration when poll() is not None
                 remaining_processes.append(p_info)
         
         active_processes = remaining_processes
@@ -150,7 +158,7 @@ def run_translation_process(chapter_file_path: str, cleanup: bool, resume: bool,
             
             pending_tasks = task_manager.get_pending_tasks(discovery_paths)
             if pending_tasks:
-                success = _run_workers_pooled(max_workers, pending_tasks, term_prompt_template, discovery_paths, ".json", {"output_format": "json"}, workspace_paths, glossary_str=glossary_content)
+                success = _run_workers_pooled(max_workers, pending_tasks, term_prompt_template, discovery_paths, ".json", {"output_format": "json"}, workspace_paths, model_name=cfg.get('gemini_cli', {}).get('model', 'gemini-2.5-pro'), glossary_str=glossary_content)
                 if not success: system_logger.error("[Orchestrator] Этап поиска терминов завершился с ошибками."); return
 
             system_logger.info("\n--- Сбор и подтверждение терминов ---")
@@ -178,7 +186,7 @@ def run_translation_process(chapter_file_path: str, cleanup: bool, resume: bool,
             
             pending_tasks = task_manager.get_pending_tasks(translation_paths)
             if pending_tasks:
-                success = _run_workers_pooled(max_workers, pending_tasks, translation_prompt_template, translation_paths, ".txt", {"output_format": "text"}, workspace_paths, glossary_str=glossary_content, style_guide_str=style_guide_content)
+                success = _run_workers_pooled(max_workers, pending_tasks, translation_prompt_template, translation_paths, ".txt", {"output_format": "text"}, workspace_paths, model_name=cfg.get('gemini_cli', {}).get('model', 'gemini-2.5-pro'), glossary_str=glossary_content, style_guide_str=style_guide_content)
                 if not success: system_logger.error("[Orchestrator] Этап перевода завершился с ошибками."); return
             
             with open(translation_checkpoint, 'w') as f: f.write(time.strftime("%Y-%m-%d %H:%M:%S"))
@@ -200,7 +208,7 @@ def run_translation_process(chapter_file_path: str, cleanup: bool, resume: bool,
             
             pending_tasks = task_manager.get_pending_tasks(reading_paths)
             if pending_tasks:
-                success = _run_workers_pooled(max_workers, pending_tasks, proofreading_prompt_template, reading_paths, ".txt", {"output_format": "text"}, workspace_paths, glossary_str=glossary_content, style_guide_str=style_guide_content)
+                success = _run_workers_pooled(max_workers, pending_tasks, proofreading_prompt_template, reading_paths, ".txt", {"output_format": "text"}, workspace_paths, model_name=cfg.get('gemini_cli', {}).get('model', 'gemini-2.5-pro'), glossary_str=glossary_content, style_guide_str=style_guide_content)
                 if not success: system_logger.error("[Orchestrator] Этап вычитки завершился с ошибками."); return
 
             with open(reading_checkpoint, 'w') as f: f.write(time.strftime("%Y-%m-%d %H:%M:%S"))

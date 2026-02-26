@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import json_repair
 from typing import Dict, Any, Optional
 from logger import system_logger
 
@@ -18,7 +19,8 @@ def collect_and_deduplicate_terms(workspace_paths: dict) -> Dict[str, Any]:
             response_str = cli_output["response"]
             match = re.search(r'```json\s*\n(.*?)\s*\n```', response_str, re.DOTALL)
             json_str = match.group(1) if match else response_str
-            data = json.loads(json_str)
+            data = json_repair.loads(json_str)
+            if not isinstance(data, dict): continue
             for category, items in data.items():
                 if not isinstance(items, dict): continue
                 for term_id, term_data in items.items():
@@ -81,6 +83,7 @@ def present_for_confirmation(new_terms: Dict[str, Any]) -> Optional[Dict[str, An
             return final_terms
         if command in ['quit', 'exit', 'q']: return None
         parts = command.split()
+        if not parts: continue
         action = parts[0]
         try:
             indices = [int(p) - 1 for p in parts[1:]]

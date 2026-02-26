@@ -1,6 +1,10 @@
 import os
 import json
 import pytest
+import json_repair
+from unittest.mock import patch
+import json
+import pytest
 from unittest.mock import patch
 from term_collector import collect_and_deduplicate_terms, update_glossary_file, present_for_confirmation
 
@@ -45,6 +49,25 @@ def test_collect_and_deduplicate_terms(tmp_path):
     
     assert len(result["terminology"]) == 1
     assert "term1" in result["terminology"]
+    assert len(result["terminology"]) == 1
+    assert "term1" in result["terminology"]
+
+def test_collect_malformed_json(tmp_path):
+    terms_dir = tmp_path / "terms"
+    terms_dir.mkdir()
+    
+    # Malformed JSON: missing closing brace and trailing comma
+    malformed_content = {
+        "response": "```json\n" + "{\"characters\": {\"char3\": {\"name\": {\"ru\": \"Имя3\"}," + "\n```"
+    }
+    (terms_dir / "malformed.json").write_text(json.dumps(malformed_content), encoding="utf-8")
+    
+    workspace_paths = {"terms": str(terms_dir)}
+    result = collect_and_deduplicate_terms(workspace_paths)
+    
+    assert "characters" in result
+    assert "char3" in result["characters"]
+    assert result["characters"]["char3"]["name"]["ru"] == "Имя3"
 
 def test_update_glossary_file(tmp_path):
     glossary_file = tmp_path / "glossary.json"
