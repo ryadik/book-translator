@@ -6,6 +6,8 @@ import re
 import shutil
 import sys
 import uuid
+import concurrent.futures
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from typing import Dict, Any, List
 
 from logger import setup_loggers, system_logger, input_logger, output_logger
@@ -15,87 +17,104 @@ import task_manager
 import term_collector
 import convert_to_docx
 
+def _run_single_worker(task_path: str, prompt_template: str, step_paths: Dict[str, str], output_suffix: str, cli_args: Dict[str, Any], workspace_paths: Dict[str, Any], model_name: str, glossary_str: str, style_guide_str: str) -> bool:
+    worker_id = uuid.uuid4().hex[:6]
+    in_progress_path = None
+    try:
+        in_progress_path = task_manager.move_task(task_path, step_paths["in_progress"])
+        
+        @retry(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=4, max=10),
+            retry=retry_if_exception_type((subprocess.CalledProcessError, subprocess.TimeoutExpired)),
+            reraise=True
+        )
+        def _do_run():
+            with open(in_progress_path, 'r', encoding='utf-8') as f:
+                chunk_content = f.read()
+
+            final_prompt = prompt_template.replace('{text}', chunk_content).replace('{glossary}', glossary_str).replace('{style_guide}', style_guide_str)
+            input_logger.info(f"[{worker_id}] --- PROMPT FOR: {os.path.basename(in_progress_path)} ---\n{final_prompt}\n")
+
+            output_filename = os.path.basename(in_progress_path)
+            
+            if output_suffix == ".json":
+                output_path = os.path.join(workspace_paths["terms"], f"{output_filename}{output_suffix}")
+            else:
+                output_path = os.path.join(step_paths["done"], output_filename)
+            
+            command = ['gemini', '-m', model_name, '-p', final_prompt, '--output-format', cli_args.get('output_format', 'text')]
+
+            system_logger.info(f"[Orchestrator] Запущен воркер [id: {worker_id}] для: {os.path.basename(in_progress_path)}")
+
+            try:
+                result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', timeout=120, check=True)
+                return result.stdout, output_path, output_filename
+            except subprocess.CalledProcessError as e:
+                system_logger.error(f"[Orchestrator] Воркер [id: {worker_id}] для {os.path.basename(in_progress_path)} завершился с ошибкой (код: {e.returncode}).")
+                output_logger.error(f"[{worker_id}] --- FAILED OUTPUT FROM: {os.path.basename(in_progress_path)} ---\n{e.stderr.strip()}\n")
+                raise
+            except subprocess.TimeoutExpired as e:
+                system_logger.error(f"[Orchestrator] Воркер [id: {worker_id}] превысил лимит времени (120с). Принудительное завершение.")
+                raise
+
+        stdout_output, output_path, output_filename = _do_run()
+        
+        system_logger.info(f"[Orchestrator] Воркер [id: {worker_id}] для {output_filename} успешно завершен.")
+        
+        try:
+            with open(output_path, 'w', encoding='utf-8') as f_out:
+                f_out.write(stdout_output)
+            output_logger.info(f"[{worker_id}] --- SUCCESSFUL OUTPUT FROM: {output_filename} ---\n{stdout_output}\n")
+        except Exception as e:
+            system_logger.error(f"[Orchestrator] Ошибка при записи вывода от воркера [id: {worker_id}]: {e}")
+
+        if output_suffix == ".json":
+            task_manager.move_task(in_progress_path, step_paths["done"])
+        else:
+            os.remove(in_progress_path)
+            
+        return True
+
+    except Exception as e:
+        system_logger.critical(f"[Orchestrator] КРИТИЧЕСКАЯ ОШИБКА при запуске воркера [id: {worker_id}] для {task_path}: {e}", exc_info=True)
+        if in_progress_path and os.path.exists(in_progress_path):
+            task_manager.move_task(in_progress_path, step_paths["failed"])
+        return False
+
 def _run_workers_pooled(max_workers: int, tasks: List[str], prompt_template: str, step_paths: Dict[str, str], output_suffix: str, cli_args: Dict[str, Any], workspace_paths: Dict[str, Any], model_name: str, glossary_str = "", style_guide_str = ""):
-    active_processes = []
-    task_queue = list(tasks)
     all_successful = True
     total_tasks = len(tasks)
     completed_tasks_count = 0
 
-    while task_queue or active_processes:
-        while len(active_processes) < max_workers and task_queue:
-            task_path = task_queue.pop(0)
-            worker_id = uuid.uuid4().hex[:6]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _run_single_worker,
+                task_path,
+                prompt_template,
+                step_paths,
+                output_suffix,
+                cli_args,
+                workspace_paths,
+                model_name,
+                glossary_str,
+                style_guide_str
+            ): task_path for task_path in tasks
+        }
+
+        for future in concurrent.futures.as_completed(futures):
+            task_path = futures[future]
             try:
-                in_progress_path = task_manager.move_task(task_path, step_paths["in_progress"])
-                
-                with open(in_progress_path, 'r', encoding='utf-8') as f:
-                    chunk_content = f.read()
-
-                final_prompt = prompt_template.replace('{text}', chunk_content).replace('{glossary}', glossary_str).replace('{style_guide}', style_guide_str)
-                input_logger.info(f"[{worker_id}] --- PROMPT FOR: {os.path.basename(in_progress_path)} ---\n{final_prompt}\n")
-
-                output_filename = os.path.basename(in_progress_path)
-                
-                if output_suffix == ".json":
-                    output_path = os.path.join(workspace_paths["terms"], f"{output_filename}{output_suffix}")
-                else:
-                    output_path = os.path.join(step_paths["done"], output_filename)
-                
-                command = ['gemini', '-m', model_name, '-p', final_prompt, '--output-format', cli_args.get('output_format', 'text')]
-
-                proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
-                active_processes.append({"process": proc, "in_progress_path": in_progress_path, "output_path": output_path, "id": worker_id, "is_term_discovery": output_suffix == ".json", "start_time": time.time()})
-                system_logger.info(f"[Orchestrator] Запущен воркер [id: {worker_id}] для: {os.path.basename(in_progress_path)}")
-
-            except Exception as e:
-                system_logger.critical(f"[Orchestrator] КРИТИЧЕСКАЯ ОШИБКА при запуске воркера [id: {worker_id}] для {task_path}: {e}", exc_info=True)
-                all_successful = False
-                if 'in_progress_path' in locals() and os.path.exists(in_progress_path):
-                    task_manager.move_task(in_progress_path, step_paths["failed"])
-                continue
-
-        remaining_processes = []
-        for p_info in active_processes:
-            proc = p_info["process"]
-            worker_id = p_info["id"]
-            if proc.poll() is not None:
-                worker_name = os.path.basename(p_info['in_progress_path'])
-                try:
-                    stdout_output, stderr_output = proc.communicate(timeout=120)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    stdout_output, stderr_output = proc.communicate()
-                
-                if proc.returncode != 0:
-                    all_successful = False
-                    system_logger.error(f"[Orchestrator] Воркер [id: {worker_id}] для {worker_name} завершился с ошибкой (код: {proc.returncode}).")
-                    output_logger.error(f"[{worker_id}] --- FAILED OUTPUT FROM: {worker_name} ---\n{stderr_output.strip()}\n")
-                    task_manager.move_task(p_info['in_progress_path'], step_paths["failed"])
-                else:
+                success = future.result()
+                if success:
                     completed_tasks_count += 1
-                    system_logger.info(f"[Orchestrator] Воркер [id: {worker_id}] для {worker_name} успешно завершен. ({completed_tasks_count}/{total_tasks})")
-                    
-                    try:
-                        with open(p_info['output_path'], 'w', encoding='utf-8') as f_out:
-                            f_out.write(stdout_output)
-                        output_logger.info(f"[{worker_id}] --- SUCCESSFUL OUTPUT FROM: {worker_name} ---\n{stdout_output}\n")
-                    except Exception as e:
-                        system_logger.error(f"[Orchestrator] Ошибка при записи вывода от воркера [id: {worker_id}]: {e}")
-
-                    if p_info["is_term_discovery"]:
-                        task_manager.move_task(p_info['in_progress_path'], step_paths["done"])
-                    else:
-                        os.remove(p_info['in_progress_path'])
-            else:
-                if time.time() - p_info["start_time"] > 120:
-                    system_logger.error(f"[Orchestrator] Воркер [id: {worker_id}] превысил лимит времени (120с). Принудительное завершение.")
-                    proc.kill()
-                    # It will be handled in the next iteration when poll() is not None
-                remaining_processes.append(p_info)
-        
-        active_processes = remaining_processes
-        time.sleep(1)
+                    system_logger.info(f"[Orchestrator] Прогресс: ({completed_tasks_count}/{total_tasks})")
+                else:
+                    all_successful = False
+            except Exception as e:
+                system_logger.critical(f"[Orchestrator] Неожиданная ошибка при обработке {task_path}: {e}", exc_info=True)
+                all_successful = False
 
     return all_successful
 
