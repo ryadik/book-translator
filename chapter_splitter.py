@@ -17,11 +17,21 @@ def split_chapter_intelligently(chapter_file_path, output_dir, target_chars=3000
     current_chunk_lines = []
     current_chunk_chars = 0
     chunk_num = 1
+    chunks_data = []
+    previous_text = ""
 
     def write_part():
-        nonlocal current_chunk_lines, current_chunk_chars, chunk_num
+        nonlocal current_chunk_lines, current_chunk_chars, chunk_num, chunks_data, previous_text
         if not current_chunk_lines:
             return
+
+        chunk_text = "".join(current_chunk_lines)
+        chunks_data.append({
+            "id": chunk_num,
+            "text": chunk_text,
+            "context": previous_text
+        })
+        previous_text = chunk_text
 
         chunk_output_file = os.path.join(output_dir, f"chunk_{chunk_num}.txt")
 
@@ -95,3 +105,4 @@ def split_chapter_intelligently(chapter_file_path, output_dir, target_chars=3000
         i += 1
 
     write_part()
+    return chunks_data
