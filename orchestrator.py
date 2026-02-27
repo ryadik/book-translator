@@ -8,14 +8,16 @@ import sys
 import uuid
 import concurrent.futures
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from logger import setup_loggers, system_logger, input_logger, output_logger
 import config
 import chapter_splitter
+from tui import create_progress
 import task_manager
 import term_collector
 import convert_to_docx
+import proofreader
 import db
 from rate_limiter import RateLimiter
 
@@ -102,6 +104,88 @@ def _run_single_worker(
         db.add_chunk(db_path, project_id, chunk_index, chunk['content_jp'], chunk['content_ru'], f"{step_name}_failed")
         return False
 
+def _run_global_proofreading(
+    chunks: List[Dict[str, Any]],
+    prompt_template: str,
+    model_name: str,
+    rate_limiter: RateLimiter,
+    progress=None,
+    task_id=None
+) -> List[Dict[str, Any]]:
+    system_logger.info("[Orchestrator] Запуск глобальной вычитки...")
+    
+    # Format chunks for the prompt
+    formatted_chunks = []
+    for chunk in chunks:
+        formatted_chunks.append(f"Chunk {chunk['chunk_index']}:\ncontent_jp: {chunk['content_jp']}\ncontent_ru: {chunk['content_ru']}\n")
+    
+    chunks_text = "\n".join(formatted_chunks)
+    final_prompt = prompt_template + "\n\n" + chunks_text
+    
+    # Replace content_en with content_jp in the prompt template if needed
+    final_prompt = final_prompt.replace("content_en", "content_jp")
+    
+    command = ['gemini', '-m', model_name, '-p', final_prompt, '--output-format', 'json']
+    
+    try:
+        with rate_limiter:
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', timeout=300, check=True)
+        
+        raw_output = result.stdout.strip()
+        if raw_output.startswith("```json"):
+            raw_output = raw_output[7:]
+        if raw_output.startswith("```"):
+            raw_output = raw_output[3:]
+        if raw_output.endswith("```"):
+            raw_output = raw_output[:-3]
+        raw_output = raw_output.strip()
+        
+        diffs = json.loads(raw_output)
+        if isinstance(diffs, dict) and "response" in diffs:
+            # gemini-cli might wrap the output in a JSON object with stats
+            response_text = diffs["response"]
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.startswith("```"):
+                response_text = response_text[3:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+            diffs = json.loads(response_text)
+            
+        if not isinstance(diffs, list):
+            system_logger.warning(f"[Orchestrator] Глобальная вычитка вернула не список. Пропуск. Ответ: {raw_output}")
+            return chunks
+        if not isinstance(diffs, list):
+            system_logger.warning(f"[Orchestrator] Глобальная вычитка вернула не список. Пропуск. Ответ: {raw_output}")
+            return chunks
+        if not isinstance(diffs, list):
+            system_logger.warning("[Orchestrator] Глобальная вычитка вернула не список. Пропуск.")
+            return chunks
+            
+        system_logger.info(f"[Orchestrator] Получено {len(diffs)} правок от глобальной вычитки.")
+        updated_chunks = proofreader.apply_diffs(chunks, diffs)
+        
+        if progress and task_id is not None:
+            progress.update(task_id, advance=1)
+            
+        return updated_chunks
+        
+    except subprocess.CalledProcessError as e:
+        system_logger.error(f"[Orchestrator] Ошибка глобальной вычитки (код: {e.returncode}).\n{e.stderr.strip()}")
+        return chunks
+    except subprocess.TimeoutExpired:
+        system_logger.error("[Orchestrator] Глобальная вычитка превысила лимит времени (300с).")
+        return chunks
+    except json.JSONDecodeError:
+        system_logger.error("[Orchestrator] Ошибка парсинга JSON от глобальной вычитки.")
+        return chunks
+    except Exception as e:
+        system_logger.critical(f"[Orchestrator] Неожиданная ошибка при глобальной вычитке: {e}", exc_info=True)
+        return chunks
+        system_logger.critical(f"[Orchestrator] Неожиданная ошибка при глобальной вычитке: {e}", exc_info=True)
+        return chunks
+
 def _run_workers_pooled(
     max_workers: int,
     chunks: List[Dict[str, Any]],
@@ -116,45 +200,49 @@ def _run_workers_pooled(
     rate_limiter: RateLimiter,
     glossary_str = "",
     style_guide_str = "",
-    contexts: Dict[int, str] = None
+    contexts: Optional[Dict[int, str]] = None
 ):
     all_successful = True
     total_tasks = len(chunks)
     completed_tasks_count = 0
     contexts = contexts or {}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                _run_single_worker,
-                chunk,
-                prompt_template,
-                step_name,
-                output_suffix,
-                cli_args,
-                workspace_paths,
-                model_name,
-                glossary_str,
-                style_guide_str,
-                db_path,
-                project_id,
-                rate_limiter,
-                contexts.get(chunk['chunk_index'], "")
-            ): chunk for chunk in chunks
-        }
+    with create_progress() as progress:
+        task_id = progress.add_task(f"[cyan]Processing {step_name}...", total=total_tasks)
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _run_single_worker,
+                    chunk,
+                    prompt_template,
+                    step_name,
+                    output_suffix,
+                    cli_args,
+                    workspace_paths,
+                    model_name,
+                    glossary_str,
+                    style_guide_str,
+                    db_path,
+                    project_id,
+                    rate_limiter,
+                    contexts.get(chunk['chunk_index'], "")
+                ): chunk for chunk in chunks
+            }
 
-        for future in concurrent.futures.as_completed(futures):
-            chunk = futures[future]
-            try:
-                success = future.result()
-                if success:
-                    completed_tasks_count += 1
-                    system_logger.info(f"[Orchestrator] Прогресс: ({completed_tasks_count}/{total_tasks})")
-                else:
+            for future in concurrent.futures.as_completed(futures):
+                chunk = futures[future]
+                try:
+                    success = future.result()
+                    if success:
+                        completed_tasks_count += 1
+                        progress.update(task_id, advance=1)
+                        system_logger.info(f"[Orchestrator] Прогресс: ({completed_tasks_count}/{total_tasks})")
+                    else:
+                        all_successful = False
+                except Exception as e:
+                    system_logger.critical(f"[Orchestrator] Неожиданная ошибка при обработке chunk_{chunk['chunk_index']}: {e}", exc_info=True)
                     all_successful = False
-            except Exception as e:
-                system_logger.critical(f"[Orchestrator] Неожиданная ошибка при обработке chunk_{chunk['chunk_index']}: {e}", exc_info=True)
-                all_successful = False
 
     return all_successful
 
@@ -302,6 +390,36 @@ def run_translation_process(chapter_file_path: str, cleanup: bool, resume: bool,
             system_logger.info("[Orchestrator] Чекпоинт 'reading_complete' создан.")
         else:
             system_logger.info("\n[Orchestrator] Обнаружен чекпоинт. Пропуск этапа вычитки.")
+
+        # --- Этап 3.5: Глобальная вычитка ---
+        global_reading_checkpoint = os.path.join(workspace_paths["base"], ".stage_global_reading_complete")
+        if not os.path.exists(global_reading_checkpoint):
+            system_logger.info("\n--- ЭТАП 3.5: Глобальная вычитка текста ---")
+            try:
+                with open("prompts/global_proofreading.txt", 'r', encoding='utf-8') as f: global_proofreading_prompt_template = f.read()
+            except FileNotFoundError as e:
+                system_logger.error(f"[Orchestrator] Не найден обязательный файл: {e}"); return
+            
+            all_chunks = db.get_chunks(db_path, chapter_name)
+            
+            with create_progress() as progress:
+                task_id = progress.add_task("[cyan]Processing global proofreading...", total=1)
+                updated_chunks = _run_global_proofreading(
+                    all_chunks,
+                    global_proofreading_prompt_template,
+                    cfg.get('gemini_cli', {}).get('model', 'gemini-2.5-pro'),
+                    rate_limiter,
+                    progress,
+                    task_id
+                )
+            
+            for chunk in updated_chunks:
+                db.add_chunk(db_path, chapter_name, chunk['chunk_index'], chunk['content_jp'], chunk['content_ru'], "reading_done")
+
+            with open(global_reading_checkpoint, 'w') as f: f.write(time.strftime("%Y-%m-%d %H:%M:%S"))
+            system_logger.info("[Orchestrator] Чекпоинт 'global_reading_complete' создан.")
+        else:
+            system_logger.info("\n[Orchestrator] Обнаружен чекпоинт. Пропуск этапа глобальной вычитки.")
 
         # --- ФИНАЛЬНАЯ СБОРКА ---
         system_logger.info("\n--- Сборка итогового файла ---")

@@ -70,33 +70,30 @@ def test_collect_malformed_json(tmp_path):
     assert result["characters"]["char3"]["name"]["ru"] == "Имя3"
 
 def test_update_glossary_file(tmp_path):
-    glossary_file = tmp_path / "glossary.json"
+    db_path = str(tmp_path / "test.db")
+    import db
+    db.init_db(db_path)
     
     # Initial glossary
-    initial_data = {
-        "characters": {
-            "char1": {"name": {"ru": "Имя1"}}
-        }
-    }
-    glossary_file.write_text(json.dumps(initial_data), encoding="utf-8")
-    
+    db.add_term(db_path, "test_project", "char1_jp", "Имя1")
+
     new_terms = {
         "characters": {
-            "char2": {"name": {"ru": "Имя2"}}
+            "char2": {"name": {"jp": "char2_jp", "ru": "Имя2"}}
         },
         "terminology": {
-            "term1": {"name": {"ru": "Термин1"}}
+            "term1": {"name": {"jp": "term1_jp", "ru": "Термин1"}}
         }
     }
-    
-    update_glossary_file(new_terms, str(glossary_file))
-    
-    updated_data = json.loads(glossary_file.read_text(encoding="utf-8"))
-    
-    assert "char1" in updated_data["characters"]
-    assert "char2" in updated_data["characters"]
-    assert "term1" in updated_data["terminology"]
 
+    update_glossary_file(new_terms, db_path, "test_project")
+
+    terms = db.get_terms(db_path, "test_project")
+    term_jps = [t["term_jp"] for t in terms]
+    
+    assert "char1_jp" in term_jps
+    assert "char2_jp" in term_jps
+    assert "term1_jp" in term_jps
 @patch('builtins.input', side_effect=['ok'])
 def test_present_for_confirmation_ok(mock_input):
     new_terms = {

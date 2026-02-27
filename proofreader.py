@@ -1,6 +1,6 @@
 import logging
 import copy
-from typing import Any
+
 
 logger = logging.getLogger('system')
 
@@ -32,7 +32,9 @@ def apply_diffs(chunks: list[dict[str, str | int]], diffs: list[dict[str, str | 
             continue
             
         chunk = updated_chunks[chunk_idx]
-        content = chunk.get("content_ru", "")
+        content = str(chunk.get("content_ru", ""))
+        find_str = str(find_str)
+        replace_str = str(replace_str)
         
         occurrences = content.count(find_str)
         

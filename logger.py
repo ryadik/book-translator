@@ -3,6 +3,8 @@ import sys
 import os
 import json
 from datetime import datetime
+from rich.logging import RichHandler
+from tui import console
 
 class JsonFormatter(logging.Formatter):
     def format(self, record):
@@ -42,9 +44,9 @@ def setup_loggers(log_dir: str, debug_mode: bool):
 
     json_formatter = JsonFormatter()
 
-    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler = RichHandler(console=console, rich_tracebacks=True, markup=True)
     console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(json_formatter)
+    # console_handler.setFormatter(json_formatter)  # RichHandler has its own formatting
     system_logger.addHandler(console_handler)
 
     if not debug_mode:
