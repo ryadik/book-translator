@@ -4,6 +4,7 @@ import re
 import json_repair
 from typing import Dict, Any, Optional
 from logger import system_logger
+import db
 
 def collect_and_deduplicate_terms(workspace_paths: dict) -> Dict[str, Any]:
     terms_dir = workspace_paths.get("terms")
@@ -102,22 +103,13 @@ def present_for_confirmation(new_terms: Dict[str, Any]) -> Optional[Dict[str, An
             else: system_logger.warning(f"Неизвестная команда: '{action}'")
         except (ValueError, IndexError): system_logger.error("Ошибка: Неверный формат команды.")
 
-def update_glossary_file(new_terms: Dict[str, Any], glossary_path: str):
+def update_glossary_file(new_terms: Dict[str, Any], db_path: str, project_id: str):
     if not any(new_terms.values()): return
-    try:
-        with open(glossary_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-            glossary_data = json.loads(content) if content else {"characters": {}, "terminology": {}, "expressions": {}}
-    except (FileNotFoundError, json.JSONDecodeError):
-        glossary_data = {"characters": {}, "terminology": {}, "expressions": {}}
-    system_logger.info(f"\n[TermCollector] Обновление основного глоссария: {glossary_path}")
+    system_logger.info(f"\n[TermCollector] Обновление SQLite глоссария: {db_path}")
     for cat in ["characters", "terminology", "expressions"]:
-        if cat not in glossary_data: glossary_data[cat] = {}
-    glossary_data["characters"].update(new_terms.get("characters", {}))
-    glossary_data["terminology"].update(new_terms.get("terminology", {}))
-    glossary_data["expressions"].update(new_terms.get("expressions", {}))
-    try:
-        with open(glossary_path, 'w', encoding='utf-8') as f: json.dump(glossary_data, f, ensure_ascii=False, indent=2)
-        system_logger.info(f"[TermCollector] Глоссарий успешно обновлен.")
-    except IOError as e:
-        system_logger.critical(f"[TermCollector] КРИТИЧЕСКАЯ ОШИБКА: Не удалось сохранить обновленный глоссарий: {e}")
+        for term_id, term_data in new_terms.get(cat, {}).items():
+            term_jp = term_data.get("name", {}).get("jp", "")
+            term_ru = term_data.get("name", {}).get("ru", "")
+            if term_jp and term_ru:
+                db.add_term(db_path, project_id, term_jp, term_ru)
+    system_logger.info(f"[TermCollector] Глоссарий успешно обновлен.")

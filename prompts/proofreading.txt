@@ -109,7 +109,13 @@ Proofread and polish the following Russian text using the protocols above.
 
 ## 6. SOURCE FRAGMENT
 
+<previous_context>
+{previous_context}
+</previous_context>
+
 <source_text>
+{text}
+</source_text>
 {text}
 </source_text>
 
