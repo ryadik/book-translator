@@ -80,7 +80,11 @@ def present_for_confirmation(new_terms: Dict[str, Any]) -> Optional[Dict[str, An
             ru_name = term_data.get('name', {}).get('ru') or term_data.get('term_ru', 'N/A')
             system_logger.info(f"\n--- Термин #{i+1} ---\n  ID: {term['id']} (Категория: {term['category']})\n  JP: {jp_name}\n  RU: {ru_name}\n  Описание: {term_data.get('description', 'N/A')}\n  Контекст: {term_data.get('context', 'N/A')}")
         system_logger.info("\n" + "-"*40 + "\n  Команды: ok, del <номера>, edit <номер>, quit\n" + "-"*40)
-        try: command = input("\nВведите команду: ").strip().lower()
+        try: 
+            if os.environ.get('AUTO_ACCEPT_TERMS') == '1':
+                command = 'ok'
+            else:
+                command = input("\nВведите команду: ").strip().lower()
         except EOFError: return None
         if command in ['ok', 'yes', 'y']:
             final_terms = {"characters": {}, "terminology": {}, "expressions": {}}
@@ -176,9 +180,14 @@ def save_approved_terms(terms: Dict[str, Any], glossary_db: Path,
     count = 0
     for category, items in terms.items():
         for term_id, term_data in items.items():
-            term_source = term_data.get('term_jp', term_data.get('term_source', term_id))
-            term_target = term_data.get('term_ru', term_data.get('term_target', ''))
-            comment = term_data.get('comment', '')
+            term_source = term_data.get('name', {}).get('jp') or \
+                          term_data.get('term_jp') or \
+                          term_data.get('term_source') or \
+                          term_id
+            term_target = term_data.get('name', {}).get('ru') or \
+                          term_data.get('term_ru') or \
+                          term_data.get('term_target', '')
+            comment = term_data.get('description') or term_data.get('comment', '')
             if term_source and term_target:
                 db.add_term(glossary_db, term_source, term_target,
                            source_lang, target_lang, comment)

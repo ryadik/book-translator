@@ -346,12 +346,11 @@ def run_translation_process(
                 raw_responses.append(json_file.read_text(encoding='utf-8'))
             
             new_terms = term_collector.collect_terms_from_responses(raw_responses)
-            approved_terms = term_collector.present_for_confirmation(new_terms)
-            if approved_terms is None:
-                system_logger.info("[Orchestrator] Пользователь отменил операцию.")
-                return
-            if approved_terms:
-                term_collector.save_approved_terms(approved_terms, glossary_db, source_lang, target_lang)
+            if any(new_terms.values()):
+                tsv_path = volume_paths.state_dir / 'pending_terms.tsv'
+                term_collector.approve_via_tsv(new_terms, tsv_path, glossary_db, source_lang, target_lang)
+            else:
+                system_logger.info("[TermCollector] Новых терминов для добавления не найдено.")
             
             discovery_checkpoint.write_text(time.strftime("%Y-%m-%d %H:%M:%S"))
             system_logger.info("[Orchestrator] Чекпоинт 'discovery_complete' создан.")
@@ -457,7 +456,8 @@ def run_translation_process(
         system_logger.info(f"✅ Глава успешно переведена и собрана в файл: {txt_output_path}")
         
         # --- ЭТАП 4: ОПЦИОНАЛЬНАЯ КОНВЕРТАЦИЯ В DOCX ---
-        if input("\nКонвертировать итоговый файл в .docx? (y/n): ").lower() == 'y':
+        auto_docx = os.environ.get('AUTO_CONVERT_DOCX')
+        if auto_docx == '1' or (auto_docx is None and input("\nКонвертировать итоговый файл в .docx? (y/n): ").lower() == 'y'):
             try:
                 docx_output_path = txt_output_path.with_suffix('.docx')
                 convert_to_docx.convert_txt_to_docx(str(txt_output_path), str(docx_output_path))
