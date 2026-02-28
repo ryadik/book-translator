@@ -3,9 +3,7 @@ import json
 import pytest
 import json_repair
 from unittest.mock import patch
-import json
-import pytest
-from unittest.mock import patch
+from pathlib import Path
 from term_collector import collect_and_deduplicate_terms, update_glossary_file, present_for_confirmation
 
 def test_collect_and_deduplicate_terms(tmp_path):
@@ -49,8 +47,6 @@ def test_collect_and_deduplicate_terms(tmp_path):
     
     assert len(result["terminology"]) == 1
     assert "term1" in result["terminology"]
-    assert len(result["terminology"]) == 1
-    assert "term1" in result["terminology"]
 
 def test_collect_malformed_json(tmp_path):
     terms_dir = tmp_path / "terms"
@@ -70,11 +66,11 @@ def test_collect_malformed_json(tmp_path):
     assert result["characters"]["char3"]["name"]["ru"] == "Имя3"
 
 def test_update_glossary_file(tmp_path):
-    # update_glossary_file uses old db.add_term signature (project_id, term_jp, term_ru).
+    # update_glossary_file uses new db.add_term signature.
     # We mock db.add_term in term_collector's namespace to capture calls.
     called_with = []
 
-    def mock_add_term(db_path, project_id, term_jp, term_ru):
+    def mock_add_term(db_path, term_jp, term_ru, source_lang, target_lang):
         called_with.append((term_jp, term_ru))
 
     new_terms = {
@@ -87,11 +83,12 @@ def test_update_glossary_file(tmp_path):
     }
 
     with patch('term_collector.db.add_term', side_effect=mock_add_term):
-        update_glossary_file(new_terms, str(tmp_path / 'test.db'), 'test_project')
+        update_glossary_file(new_terms, tmp_path / 'test.db')
 
     term_jps = [t[0] for t in called_with]
     assert 'char2_jp' in term_jps
     assert 'term1_jp' in term_jps
+
 @patch('builtins.input', side_effect=['ok'])
 def test_present_for_confirmation_ok(mock_input):
     new_terms = {
@@ -115,7 +112,6 @@ def test_present_for_confirmation_quit(mock_input):
     result = present_for_confirmation(new_terms)
     assert result is None
 
-
 def test_collect_terms_from_responses():
     """Test collect_terms_from_responses with raw JSON string."""
     from term_collector import collect_terms_from_responses
@@ -123,15 +119,14 @@ def test_collect_terms_from_responses():
         "response": '{"characters": {"\u30ad\u30ea\u30c8": {"term_jp": "\u30ad\u30ea\u30c8", "term_ru": "\u041a\u0438\u0440\u0438\u0442\u043e", "comment": "\u0433\u0435\u0440\u043e\u0439"}}}'
     })
     result = collect_terms_from_responses([raw])
-    assert "\u30ad\u30ea\u30c8" in result
-    assert result["\u30ad\u30ea\u30c8"]["data"]["term_ru"] == "\u041a\u0438\u0440\u0438\u0442\u043e"
-
+    assert "characters" in result
+    assert "\u30ad\u30ea\u30c8" in result["characters"]
+    assert result["characters"]["\u30ad\u30ea\u30c8"]["term_ru"] == "\u041a\u0438\u0440\u0438\u0442\u043e"
 
 def test_collect_terms_from_responses_empty():
     from term_collector import collect_terms_from_responses
     result = collect_terms_from_responses([])
-    assert result == {}
-
+    assert all(not v for v in result.values())
 
 def test_save_approved_terms(tmp_path):
     """Test save_approved_terms writes to glossary DB."""
@@ -141,7 +136,9 @@ def test_save_approved_terms(tmp_path):
     init_glossary_db(glossary_db)
     
     terms = {
-        "\u30ad\u30ea\u30c8": {"data": {"term_jp": "\u30ad\u30ea\u30c8", "term_ru": "\u041a\u0438\u0440\u0438\u0442\u043e", "comment": ""}}
+        "characters": {
+            "\u30ad\u30ea\u30c8": {"term_jp": "\u30ad\u30ea\u30c8", "term_ru": "\u041a\u0438\u0440\u0438\u0442\u043e", "comment": ""}
+        }
     }
     save_approved_terms(terms, glossary_db)
     

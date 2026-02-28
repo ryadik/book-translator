@@ -262,7 +262,7 @@ def run_translation_process(
     path_resolver.ensure_volume_dirs(volume_paths)
     series_paths = path_resolver.get_series_paths(series_root, volume_name)
 
-    setup_loggers(volume_paths.logs_dir, debug_mode)
+    setup_loggers(str(volume_paths.logs_dir), debug_mode)
     system_logger.info("--- Запуск нового процесса перевода ---")
 
     glossary_db = series_root / 'glossary.db'
@@ -341,14 +341,17 @@ def run_translation_process(
                     return
 
             system_logger.info("\n--- Сбор и подтверждение терминов ---")
-            # TODO Task 9: replace with save_approved_terms()
-            new_terms = term_collector.collect_and_deduplicate_terms(volume_paths.cache_dir)
+            raw_responses = []
+            for json_file in volume_paths.cache_dir.glob("*.json"):
+                raw_responses.append(json_file.read_text(encoding='utf-8'))
+            
+            new_terms = term_collector.collect_terms_from_responses(raw_responses)
             approved_terms = term_collector.present_for_confirmation(new_terms)
             if approved_terms is None:
                 system_logger.info("[Orchestrator] Пользователь отменил операцию.")
                 return
             if approved_terms:
-                term_collector.update_glossary_file(approved_terms, glossary_db, chapter_name)
+                term_collector.save_approved_terms(approved_terms, glossary_db, source_lang, target_lang)
             
             discovery_checkpoint.write_text(time.strftime("%Y-%m-%d %H:%M:%S"))
             system_logger.info("[Orchestrator] Чекпоинт 'discovery_complete' создан.")

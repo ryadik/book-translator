@@ -153,14 +153,14 @@ def _make_mock_series(tmp_path):
     return series_root, chapter_path
 
 
-@patch('orchestrator.term_collector.collect_and_deduplicate_terms', return_value={})
+@patch('orchestrator.term_collector.collect_terms_from_responses', return_value={})
 @patch('orchestrator.term_collector.present_for_confirmation', return_value={})
-@patch('orchestrator.term_collector.update_glossary_file')
+@patch('orchestrator.term_collector.save_approved_terms')
 @patch('orchestrator.chapter_splitter.split_chapter_intelligently')
 @patch('orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_lock_file_created(
-    mock_input, mock_loggers, mock_splitter, mock_update_glossary,
+    mock_input, mock_loggers, mock_splitter, mock_save_terms,
     mock_confirm, mock_collect, tmp_path
 ):
     """Lock file should be created and then removed after run."""
@@ -179,18 +179,19 @@ def test_run_translation_process_lock_file_created(
     assert not lock_file.exists(), "Lock file should be removed after successful run"
 
 
-@patch('orchestrator.term_collector.collect_and_deduplicate_terms', return_value={})
+@patch('orchestrator.term_collector.collect_terms_from_responses', return_value={})
 @patch('orchestrator.term_collector.present_for_confirmation', return_value={})
-@patch('orchestrator.term_collector.update_glossary_file')
+@patch('orchestrator.term_collector.save_approved_terms')
 @patch('orchestrator.chapter_splitter.split_chapter_intelligently')
 @patch('orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_chunks_db_created(
-    mock_input, mock_loggers, mock_splitter, mock_update_glossary,
+    mock_input, mock_loggers, mock_splitter, mock_save_terms,
     mock_confirm, mock_collect, tmp_path
 ):
     """chunks.db should be created after run_translation_process."""
     series_root, chapter_path = _make_mock_series(tmp_path)
+    # Splitter returns empty — so we skip all stages
     mock_splitter.return_value = []
 
     with patch('orchestrator._run_workers_pooled', return_value=True), \
@@ -201,13 +202,13 @@ def test_run_translation_process_chunks_db_created(
     assert volume_paths.chunks_db.exists(), "chunks.db should be created"
 
 
-@patch('orchestrator.term_collector.collect_and_deduplicate_terms', return_value={})
+@patch('orchestrator.term_collector.collect_terms_from_responses', return_value={})
 @patch('orchestrator.term_collector.present_for_confirmation', return_value={})
-@patch('orchestrator.term_collector.update_glossary_file')
+@patch('orchestrator.term_collector.save_approved_terms')
 @patch('orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_chunks_added_to_db(
-    mock_input, mock_loggers, mock_update_glossary, mock_confirm, mock_collect, tmp_path
+    mock_input, mock_loggers, mock_save_terms, mock_confirm, mock_collect, tmp_path
 ):
     """Chunks from splitter should be persisted to chunks.db."""
     series_root, chapter_path = _make_mock_series(tmp_path)
@@ -247,13 +248,14 @@ def test_run_translation_process_exits_on_lock(mock_loggers, tmp_path):
     assert exc_info.value.code == 1
 
 
-@patch('orchestrator.term_collector.collect_and_deduplicate_terms', return_value={})
+@patch('orchestrator.term_collector.collect_terms_from_responses', return_value={})
 @patch('orchestrator.term_collector.present_for_confirmation', return_value=None)
+@patch('orchestrator.term_collector.save_approved_terms')
 @patch('orchestrator.chapter_splitter.split_chapter_intelligently', return_value=[{'id': 0, 'text': 'text'}])
 @patch('orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_user_cancel(
-    mock_input, mock_loggers, mock_splitter, mock_confirm, mock_collect, tmp_path
+    mock_input, mock_loggers, mock_splitter, mock_save_terms, mock_confirm, mock_collect, tmp_path
 ):
     """If user cancels during term confirmation, run should abort gracefully."""
     series_root, chapter_path = _make_mock_series(tmp_path)
@@ -266,13 +268,14 @@ def test_run_translation_process_user_cancel(
     assert result is None
 
 
-@patch('orchestrator.term_collector.collect_and_deduplicate_terms', return_value={})
+@patch('orchestrator.term_collector.collect_terms_from_responses', return_value={})
 @patch('orchestrator.term_collector.present_for_confirmation', return_value={})
+@patch('orchestrator.term_collector.save_approved_terms')
 @patch('orchestrator.chapter_splitter.split_chapter_intelligently')
 @patch('orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_output_file_created(
-    mock_input, mock_loggers, mock_splitter, mock_confirm, mock_collect, tmp_path
+    mock_input, mock_loggers, mock_splitter, mock_save_terms, mock_confirm, mock_collect, tmp_path
 ):
     """Output file should be created in volume output dir."""
     series_root, chapter_path = _make_mock_series(tmp_path)

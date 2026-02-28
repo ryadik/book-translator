@@ -8,7 +8,7 @@ from logger import system_logger
 import db
 import glossary_manager
 
-def collect_and_deduplicate_terms(workspace_paths: dict) -> Dict[str, Any]:
+def collect_and_deduplicate_terms(workspace_paths: Dict[str, Any]) -> Dict[str, Any]:
     terms_dir = workspace_paths.get("terms")
     if not terms_dir or not os.path.exists(terms_dir):
         return {}
@@ -75,7 +75,10 @@ def present_for_confirmation(new_terms: Dict[str, Any]) -> Optional[Dict[str, An
     while True:
         system_logger.info("\n" + "="*40 + "\n  Найдены новые термины для подтверждения\n" + "="*40)
         for i, term in enumerate(term_list):
-            system_logger.info(f"\n--- Термин #{i+1} ---\n  ID: {term['id']} (Категория: {term['category']})\n  JP: {term['data']['name'].get('jp', 'N/A')}\n  RU: {term['data']['name'].get('ru', 'N/A')}\n  Описание: {term['data'].get('description', 'N/A')}\n  Контекст: {term['data'].get('context', 'N/A')}")
+            term_data = term['data']
+            jp_name = term_data.get('name', {}).get('jp') or term_data.get('term_jp', 'N/A')
+            ru_name = term_data.get('name', {}).get('ru') or term_data.get('term_ru', 'N/A')
+            system_logger.info(f"\n--- Термин #{i+1} ---\n  ID: {term['id']} (Категория: {term['category']})\n  JP: {jp_name}\n  RU: {ru_name}\n  Описание: {term_data.get('description', 'N/A')}\n  Контекст: {term_data.get('context', 'N/A')}")
         system_logger.info("\n" + "-"*40 + "\n  Команды: ok, del <номера>, edit <номер>, quit\n" + "-"*40)
         try: command = input("\nВведите команду: ").strip().lower()
         except EOFError: return None
@@ -105,7 +108,7 @@ def present_for_confirmation(new_terms: Dict[str, Any]) -> Optional[Dict[str, An
             else: system_logger.warning(f"Неизвестная команда: '{action}'")
         except (ValueError, IndexError): system_logger.error("Ошибка: Неверный формат команды.")
 
-def update_glossary_file(new_terms: Dict[str, Any], db_path: str, project_id: str):
+def update_glossary_file(new_terms: Dict[str, Any], db_path: Path, source_lang: str = 'ja', target_lang: str = 'ru'):
     if not any(new_terms.values()): return
     system_logger.info(f"\n[TermCollector] Обновление SQLite глоссария: {db_path}")
     for cat in ["characters", "terminology", "expressions"]:
@@ -113,7 +116,16 @@ def update_glossary_file(new_terms: Dict[str, Any], db_path: str, project_id: st
             term_jp = term_data.get("name", {}).get("jp", "")
             term_ru = term_data.get("name", {}).get("ru", "")
             if term_jp and term_ru:
-                db.add_term(db_path, project_id, term_jp, term_ru)
+                db.add_term(db_path, term_jp, term_ru, source_lang, target_lang)
+    system_logger.info(f"[TermCollector] Глоссарий успешно обновлен.")
+    if not any(new_terms.values()): return
+    system_logger.info(f"\n[TermCollector] Обновление SQLite глоссария: {db_path}")
+    for cat in ["characters", "terminology", "expressions"]:
+        for term_id, term_data in new_terms.get(cat, {}).items():
+            term_jp = term_data.get("name", {}).get("jp", "")
+            term_ru = term_data.get("name", {}).get("ru", "")
+            if term_jp and term_ru:
+                db.add_term(db_path, term_jp, term_ru, source_lang, target_lang)
     system_logger.info(f"[TermCollector] Глоссарий успешно обновлен.")
 
 
@@ -147,7 +159,12 @@ def collect_terms_from_responses(raw_responses: List[str]) -> Dict[str, Any]:
                         unique_terms[term_id] = {"category": category, "data": term_data}
         except Exception as e:
             system_logger.warning(f"[TermCollector] Failed to parse response: {e}")
-    return unique_terms
+    final_structure = {"characters": {}, "terminology": {}, "expressions": {}}
+    for term_id, term_info in unique_terms.items():
+        cat = term_info["category"]
+        if cat in final_structure:
+            final_structure[cat][term_id] = term_info["data"]
+    return final_structure
 
 
 def save_approved_terms(terms: Dict[str, Any], glossary_db: Path,
@@ -156,15 +173,17 @@ def save_approved_terms(terms: Dict[str, Any], glossary_db: Path,
     
     Replaces update_glossary_file() — writes to series glossary.db instead of state.db.
     """
-    for term_id, term_info in terms.items():
-        term_data = term_info.get('data', {})
-        term_source = term_data.get('term_jp', term_data.get('term_source', term_id))
-        term_target = term_data.get('term_ru', term_data.get('term_target', ''))
-        comment = term_data.get('comment', '')
-        if term_source and term_target:
-            db.add_term(glossary_db, term_source, term_target,
-                       source_lang, target_lang, comment)
-    system_logger.info(f"[TermCollector] Saved {len(terms)} terms to glossary DB.")
+    count = 0
+    for category, items in terms.items():
+        for term_id, term_data in items.items():
+            term_source = term_data.get('term_jp', term_data.get('term_source', term_id))
+            term_target = term_data.get('term_ru', term_data.get('term_target', ''))
+            comment = term_data.get('comment', '')
+            if term_source and term_target:
+                db.add_term(glossary_db, term_source, term_target,
+                           source_lang, target_lang, comment)
+                count += 1
+    system_logger.info(f"[TermCollector] Saved {count} terms to glossary DB.")
 
 
 def approve_via_tsv(terms: Dict[str, Any], tsv_path: Path, glossary_db: Path,
@@ -175,13 +194,13 @@ def approve_via_tsv(terms: Dict[str, Any], tsv_path: Path, glossary_db: Path,
     """
     # Convert from internal format to list of dicts for glossary_manager
     term_list = []
-    for term_id, term_info in terms.items():
-        term_data = term_info.get('data', {})
-        term_list.append({
-            'term_source': term_data.get('term_jp', term_data.get('term_source', term_id)),
-            'term_target': term_data.get('term_ru', term_data.get('term_target', '')),
-            'comment': term_data.get('comment', ''),
-        })
+    for category, items in terms.items():
+        for term_id, term_data in items.items():
+            term_list.append({
+                'term_source': term_data.get('term_jp', term_data.get('term_source', term_id)),
+                'term_target': term_data.get('term_ru', term_data.get('term_target', '')),
+                'comment': term_data.get('comment', ''),
+            })
     
     glossary_manager.generate_approval_tsv(term_list, tsv_path)
     print(f"\n📝 Отредактируйте файл: {tsv_path}")
