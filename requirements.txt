@@ -3,3 +3,5 @@ pytest
 json_repair
 tenacity
 pytest
+
+tomli>=2.0.0

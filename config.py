@@ -1,22 +1,22 @@
-import json
-import os
+"""
+Configuration loader.
+Wraps discovery.load_series_config() for backward compatibility.
+"""
+from pathlib import Path
+from typing import Optional
+from discovery import find_series_root, load_series_config as _load_series_config
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.json')
-
-def load_config():
+def load_config(series_root: Optional[Path] = None) -> dict:
+    """Load series configuration.
+    
+    If series_root is not provided, discovers it via walk-up from CWD.
+    
+    Returns:
+        dict: Configuration with all defaults applied
+    Raises:
+        FileNotFoundError: if book-translator.toml not found
+        ValueError: if config is invalid
     """
-    Загружает конфигурационный файл config.json.
-    
-    Возвращает:
-        dict: Словарь с настройками.
-    
-    Вызывает:
-        FileNotFoundError: Если файл config.json не найден.
-        json.JSONDecodeError: Если файл имеет неверный формат JSON.
-    """
-    if not os.path.exists(CONFIG_PATH):
-        raise FileNotFoundError(f"Файл конфигурации не найден по пути: {CONFIG_PATH}")
-    
-    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        return json.load(f)
-
+    if series_root is None:
+        series_root = find_series_root()
+    return _load_series_config(series_root)
