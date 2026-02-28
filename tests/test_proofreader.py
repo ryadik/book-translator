@@ -1,5 +1,5 @@
 import pytest
-from proofreader import apply_diffs
+from book_translator.proofreader import apply_diffs
 
 def test_apply_diffs_exact_match():
     chunks = [

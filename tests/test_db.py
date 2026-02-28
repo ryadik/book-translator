@@ -1,7 +1,7 @@
 import pytest
 import sqlite3
 from pathlib import Path
-from db import (
+from book_translator.db import (
     connection,
     init_glossary_db,
     init_chunks_db,

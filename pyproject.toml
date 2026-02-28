@@ -12,30 +12,12 @@ dependencies = [
     "rich>=13.0.0",
     "tenacity>=8.0.0",
     "json-repair>=0.25.0",
-    "tomli>=2.0.0"
+    "tomli>=2.0.0",
+    "python-docx>=1.1.0"
 ]
 
 [project.scripts]
-book-translator = "cli:main"
+book-translator = "book_translator.cli:main"
 
-[tool.setuptools]
-packages = ["commands"]
-py-modules = [
-    "chapter_splitter",
-    "cli",
-    "config",
-    "convert_to_docx",
-    "db",
-    "default_prompts",
-    "discovery",
-    "glossary_manager",
-    "logger",
-    "main",
-    "orchestrator",
-    "path_resolver",
-    "proofreader",
-    "rate_limiter",
-    "task_manager",
-    "term_collector",
-    "tui"
-]
+[tool.setuptools.packages.find]
+where = ["src"]

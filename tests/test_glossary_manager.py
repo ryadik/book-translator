@@ -1,8 +1,8 @@
 import pytest
 from io import StringIO
 from pathlib import Path
-from db import init_glossary_db, add_term, get_terms
-from glossary_manager import export_tsv, import_tsv, generate_approval_tsv
+from book_translator.db import init_glossary_db, add_term, get_terms
+from book_translator.glossary_manager import export_tsv, import_tsv, generate_approval_tsv
 
 
 def test_export_tsv(tmp_path):

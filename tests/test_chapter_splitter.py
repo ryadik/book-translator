@@ -1,6 +1,6 @@
 import os
 import pytest
-from chapter_splitter import split_chapter_intelligently
+from book_translator.chapter_splitter import split_chapter_intelligently
 
 def test_split_chapter_intelligently_basic(tmp_path):
     # Create a dummy chapter file

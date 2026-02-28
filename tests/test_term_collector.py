@@ -4,7 +4,7 @@ import pytest
 import json_repair
 from unittest.mock import patch
 from pathlib import Path
-from term_collector import collect_and_deduplicate_terms, update_glossary_file, present_for_confirmation
+from book_translator.term_collector import collect_and_deduplicate_terms, update_glossary_file, present_for_confirmation
 
 def test_collect_and_deduplicate_terms(tmp_path):
     terms_dir = tmp_path / "terms"
@@ -82,7 +82,7 @@ def test_update_glossary_file(tmp_path):
         }
     }
 
-    with patch('term_collector.db.add_term', side_effect=mock_add_term):
+    with patch('book_translator.term_collector.db.add_term', side_effect=mock_add_term):
         update_glossary_file(new_terms, tmp_path / 'test.db')
 
     term_jps = [t[0] for t in called_with]
@@ -114,7 +114,7 @@ def test_present_for_confirmation_quit(mock_input):
 
 def test_collect_terms_from_responses():
     """Test collect_terms_from_responses with raw JSON string."""
-    from term_collector import collect_terms_from_responses
+    from book_translator.term_collector import collect_terms_from_responses
     raw = json.dumps({
         "response": '{"characters": {"\u30ad\u30ea\u30c8": {"term_jp": "\u30ad\u30ea\u30c8", "term_ru": "\u041a\u0438\u0440\u0438\u0442\u043e", "comment": "\u0433\u0435\u0440\u043e\u0439"}}}'
     })
@@ -124,14 +124,14 @@ def test_collect_terms_from_responses():
     assert result["characters"]["\u30ad\u30ea\u30c8"]["term_ru"] == "\u041a\u0438\u0440\u0438\u0442\u043e"
 
 def test_collect_terms_from_responses_empty():
-    from term_collector import collect_terms_from_responses
+    from book_translator.term_collector import collect_terms_from_responses
     result = collect_terms_from_responses([])
     assert all(not v for v in result.values())
 
 def test_save_approved_terms(tmp_path):
     """Test save_approved_terms writes to glossary DB."""
-    from term_collector import save_approved_terms
-    from db import init_glossary_db, get_terms
+    from book_translator.term_collector import save_approved_terms
+    from book_translator.db import init_glossary_db, get_terms
     glossary_db = tmp_path / 'glossary.db'
     init_glossary_db(glossary_db)
     

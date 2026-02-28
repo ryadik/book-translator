@@ -1,6 +1,6 @@
 import pytest
 import sys
-from cli import build_parser
+from book_translator.cli import build_parser
 
 
 def test_parser_init():

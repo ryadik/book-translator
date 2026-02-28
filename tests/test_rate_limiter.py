@@ -1,6 +1,6 @@
 import threading
 import time
-from rate_limiter import RateLimiter
+from book_translator.rate_limiter import RateLimiter
 
 def worker(rl, results, index):
     with rl:

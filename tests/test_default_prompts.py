@@ -1,5 +1,5 @@
 import pytest
-from default_prompts import PROMPTS, get_prompt, TRANSLATION_PROMPT, TERM_DISCOVERY_PROMPT
+from book_translator.default_prompts import PROMPTS, get_prompt, TRANSLATION_PROMPT, TERM_DISCOVERY_PROMPT
 
 
 class TestDefaultPrompts:

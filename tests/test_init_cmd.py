@@ -1,8 +1,8 @@
 import pytest
 import tomllib
 from argparse import Namespace
-from commands.init_cmd import run_init
-from db import connection
+from book_translator.commands.init_cmd import run_init
+from book_translator.db import connection
 
 
 def test_init_creates_full_structure(tmp_path, monkeypatch):

@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from path_resolver import (
+from book_translator.path_resolver import (
     resolve_volume_from_chapter,
     get_series_paths,
     get_volume_paths,

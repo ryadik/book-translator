@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from discovery import find_series_root, load_series_config, MARKER_FILE
+from book_translator.discovery import find_series_root, load_series_config, MARKER_FILE
 
 
 def make_toml(path: Path, content: str = '[series]\nname = "Test"'):
