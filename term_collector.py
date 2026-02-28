@@ -205,10 +205,19 @@ def approve_via_tsv(terms: Dict[str, Any], tsv_path: Path, glossary_db: Path,
     term_list = []
     for category, items in terms.items():
         for term_id, term_data in items.items():
+            term_source = term_data.get('name', {}).get('jp') or \
+                          term_data.get('term_jp') or \
+                          term_data.get('term_source') or \
+                          term_id
+            term_target = term_data.get('name', {}).get('ru') or \
+                          term_data.get('term_ru') or \
+                          term_data.get('term_target', '')
+            comment = term_data.get('description') or term_data.get('comment', '')
+            
             term_list.append({
-                'term_source': term_data.get('term_jp', term_data.get('term_source', term_id)),
-                'term_target': term_data.get('term_ru', term_data.get('term_target', '')),
-                'comment': term_data.get('comment', ''),
+                'term_source': term_source,
+                'term_target': term_target,
+                'comment': comment,
             })
     
     glossary_manager.generate_approval_tsv(term_list, tsv_path)
