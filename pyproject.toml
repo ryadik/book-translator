@@ -17,3 +17,25 @@ dependencies = [
 
 [project.scripts]
 book-translator = "cli:main"
+
+[tool.setuptools]
+packages = ["commands"]
+py-modules = [
+    "chapter_splitter",
+    "cli",
+    "config",
+    "convert_to_docx",
+    "db",
+    "default_prompts",
+    "discovery",
+    "glossary_manager",
+    "logger",
+    "main",
+    "orchestrator",
+    "path_resolver",
+    "proofreader",
+    "rate_limiter",
+    "task_manager",
+    "term_collector",
+    "tui"
+]
