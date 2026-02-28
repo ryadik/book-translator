@@ -1,6 +1,7 @@
 .sisyphus
 text
 translator/workspace/**
+release.md
 __pycache__
 
 # book-translator state files
