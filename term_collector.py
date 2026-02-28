@@ -2,9 +2,11 @@ import json
 import os
 import re
 import json_repair
-from typing import Dict, Any, Optional
+from pathlib import Path
+from typing import Dict, Any, List, Optional
 from logger import system_logger
 import db
+import glossary_manager
 
 def collect_and_deduplicate_terms(workspace_paths: dict) -> Dict[str, Any]:
     terms_dir = workspace_paths.get("terms")
@@ -113,3 +115,77 @@ def update_glossary_file(new_terms: Dict[str, Any], db_path: str, project_id: st
             if term_jp and term_ru:
                 db.add_term(db_path, project_id, term_jp, term_ru)
     system_logger.info(f"[TermCollector] Глоссарий успешно обновлен.")
+
+
+def collect_terms_from_responses(raw_responses: List[str]) -> Dict[str, Any]:
+    """Parse LLM JSON responses and deduplicate terms.
+    
+    Same JSON parsing + dedup logic as collect_and_deduplicate_terms,
+    but accepts raw response strings instead of reading from filesystem.
+    """
+    unique_terms = {}
+    for response_str in raw_responses:
+        try:
+            # Try to parse as JSON response object first (gemini-cli wraps output)
+            try:
+                cli_output = json.loads(response_str)
+                if isinstance(cli_output, dict) and "response" in cli_output:
+                    response_str = cli_output["response"]
+            except (json.JSONDecodeError, TypeError):
+                pass
+            
+            match = re.search(r'```json\s*\n(.*?)\s*\n```', response_str, re.DOTALL)
+            json_str = match.group(1) if match else response_str
+            data = json_repair.loads(json_str)
+            if not isinstance(data, dict):
+                continue
+            for category, items in data.items():
+                if not isinstance(items, dict):
+                    continue
+                for term_id, term_data in items.items():
+                    if term_id not in unique_terms:
+                        unique_terms[term_id] = {"category": category, "data": term_data}
+        except Exception as e:
+            system_logger.warning(f"[TermCollector] Failed to parse response: {e}")
+    return unique_terms
+
+
+def save_approved_terms(terms: Dict[str, Any], glossary_db: Path,
+                        source_lang: str = 'ja', target_lang: str = 'ru'):
+    """Save approved terms to the series-level glossary database.
+    
+    Replaces update_glossary_file() — writes to series glossary.db instead of state.db.
+    """
+    for term_id, term_info in terms.items():
+        term_data = term_info.get('data', {})
+        term_source = term_data.get('term_jp', term_data.get('term_source', term_id))
+        term_target = term_data.get('term_ru', term_data.get('term_target', ''))
+        comment = term_data.get('comment', '')
+        if term_source and term_target:
+            db.add_term(glossary_db, term_source, term_target,
+                       source_lang, target_lang, comment)
+    system_logger.info(f"[TermCollector] Saved {len(terms)} terms to glossary DB.")
+
+
+def approve_via_tsv(terms: Dict[str, Any], tsv_path: Path, glossary_db: Path,
+                   source_lang: str = 'ja', target_lang: str = 'ru'):
+    """Generate TSV → wait for user edit → import approved terms.
+    
+    This is the TSV 'approval buffer' workflow.
+    """
+    # Convert from internal format to list of dicts for glossary_manager
+    term_list = []
+    for term_id, term_info in terms.items():
+        term_data = term_info.get('data', {})
+        term_list.append({
+            'term_source': term_data.get('term_jp', term_data.get('term_source', term_id)),
+            'term_target': term_data.get('term_ru', term_data.get('term_target', '')),
+            'comment': term_data.get('comment', ''),
+        })
+    
+    glossary_manager.generate_approval_tsv(term_list, tsv_path)
+    print(f"\n📝 Отредактируйте файл: {tsv_path}")
+    print("Удалите ненужные строки, исправьте переводы.")
+    input("Нажмите Enter когда закончите...")
+    count = glossary_manager.import_tsv(glossary_db, tsv_path, source_lang, target_lang)
+    print(f"✅ Импортировано {count} терминов")
