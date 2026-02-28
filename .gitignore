@@ -2,3 +2,9 @@
 text
 translator/workspace/**
 __pycache__
+
+# book-translator state files
+.state/
+*.db-wal
+*.db-shm
+glossary.db

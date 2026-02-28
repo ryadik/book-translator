@@ -1,3 +1,5 @@
+# DEPRECATED: Phase 3 replaced this module with path_resolver.py and pathlib.
+# This file will be removed in Phase 4. Do not add new code here.
 import os
 import shutil
 from logger import system_logger
