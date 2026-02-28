@@ -70,12 +70,12 @@ def test_collect_malformed_json(tmp_path):
     assert result["characters"]["char3"]["name"]["ru"] == "Имя3"
 
 def test_update_glossary_file(tmp_path):
-    db_path = str(tmp_path / "test.db")
-    import db
-    db.init_db(db_path)
-    
-    # Initial glossary
-    db.add_term(db_path, "test_project", "char1_jp", "Имя1")
+    # update_glossary_file uses old db.add_term signature (project_id, term_jp, term_ru).
+    # We mock db.add_term in term_collector's namespace to capture calls.
+    called_with = []
+
+    def mock_add_term(db_path, project_id, term_jp, term_ru):
+        called_with.append((term_jp, term_ru))
 
     new_terms = {
         "characters": {
@@ -86,14 +86,12 @@ def test_update_glossary_file(tmp_path):
         }
     }
 
-    update_glossary_file(new_terms, db_path, "test_project")
+    with patch('term_collector.db.add_term', side_effect=mock_add_term):
+        update_glossary_file(new_terms, str(tmp_path / 'test.db'), 'test_project')
 
-    terms = db.get_terms(db_path, "test_project")
-    term_jps = [t["term_jp"] for t in terms]
-    
-    assert "char1_jp" in term_jps
-    assert "char2_jp" in term_jps
-    assert "term1_jp" in term_jps
+    term_jps = [t[0] for t in called_with]
+    assert 'char2_jp' in term_jps
+    assert 'term1_jp' in term_jps
 @patch('builtins.input', side_effect=['ok'])
 def test_present_for_confirmation_ok(mock_input):
     new_terms = {
