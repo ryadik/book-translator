@@ -1,7 +1,7 @@
 from pathlib import Path
 from book_translator.discovery import find_series_root, load_series_config
 from book_translator.path_resolver import resolve_volume_from_chapter
-from book_translator from book_translator import orchestrator
+from book_translator import orchestrator
 
 
 def run_translate(args):
