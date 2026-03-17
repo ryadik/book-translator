@@ -111,3 +111,107 @@ class TestLoadSeriesConfig:
     def test_raises_missing_toml_file(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             load_series_config(tmp_path)
+
+
+class TestConfigValidation:
+    """Tests for _validate_config — called inside load_series_config after defaults."""
+
+    def _write_toml(self, tmp_path, extra_content: str = '') -> Path:
+        content = '[series]\nname = "TestSeries"\n' + extra_content
+        (tmp_path / MARKER_FILE).write_text(content, encoding='utf-8')
+        return tmp_path
+
+    # ── Language codes ────────────────────────────────────────────────────────
+
+    def test_invalid_source_lang_raises(self, tmp_path):
+        self._write_toml(tmp_path, 'source_lang = "xyz123"')
+        with pytest.raises(ValueError, match="source_lang"):
+            load_series_config(tmp_path)
+
+    def test_invalid_target_lang_raises(self, tmp_path):
+        self._write_toml(tmp_path, 'target_lang = "RUUU"')
+        with pytest.raises(ValueError, match="target_lang"):
+            load_series_config(tmp_path)
+
+    def test_uppercase_lang_code_raises(self, tmp_path):
+        self._write_toml(tmp_path, 'source_lang = "JA"')
+        with pytest.raises(ValueError, match="source_lang"):
+            load_series_config(tmp_path)
+
+    def test_valid_lang_codes_pass(self, tmp_path):
+        """Standard 2-letter codes should not raise."""
+        self._write_toml(tmp_path, 'source_lang = "ja"\ntarget_lang = "ru"')
+        cfg = load_series_config(tmp_path)
+        assert cfg['series']['source_lang'] == 'ja'
+
+    # ── Splitter ──────────────────────────────────────────────────────────────
+
+    def test_negative_chunk_size_raises(self, tmp_path):
+        self._write_toml(tmp_path, '[splitter]\ntarget_chunk_size = -1')
+        with pytest.raises(ValueError, match="target_chunk_size"):
+            load_series_config(tmp_path)
+
+    def test_zero_max_part_chars_raises(self, tmp_path):
+        self._write_toml(tmp_path, '[splitter]\nmax_part_chars = 0')
+        with pytest.raises(ValueError, match="max_part_chars"):
+            load_series_config(tmp_path)
+
+    def test_float_chunk_size_raises(self, tmp_path):
+        """Chunk sizes must be integers, not floats."""
+        self._write_toml(tmp_path, '[splitter]\ntarget_chunk_size = 600.5')
+        with pytest.raises(ValueError, match="target_chunk_size"):
+            load_series_config(tmp_path)
+
+    # ── Workers ───────────────────────────────────────────────────────────────
+
+    def test_zero_max_concurrent_raises(self, tmp_path):
+        self._write_toml(tmp_path, '[workers]\nmax_concurrent = 0')
+        with pytest.raises(ValueError, match="max_concurrent"):
+            load_series_config(tmp_path)
+
+    def test_over_limit_max_concurrent_raises(self, tmp_path):
+        self._write_toml(tmp_path, '[workers]\nmax_concurrent = 201')
+        with pytest.raises(ValueError, match="max_concurrent"):
+            load_series_config(tmp_path)
+
+    def test_valid_max_concurrent_boundary(self, tmp_path):
+        """max_concurrent=1 and 200 should both pass."""
+        self._write_toml(tmp_path, '[workers]\nmax_concurrent = 1')
+        cfg = load_series_config(tmp_path)
+        assert cfg['workers']['max_concurrent'] == 1
+
+    # ── Retry ─────────────────────────────────────────────────────────────────
+
+    def test_zero_max_attempts_raises(self, tmp_path):
+        self._write_toml(tmp_path, '[retry]\nmax_attempts = 0')
+        with pytest.raises(ValueError, match="max_attempts"):
+            load_series_config(tmp_path)
+
+    def test_eleven_max_attempts_raises(self, tmp_path):
+        self._write_toml(tmp_path, '[retry]\nmax_attempts = 11')
+        with pytest.raises(ValueError, match="max_attempts"):
+            load_series_config(tmp_path)
+
+    def test_valid_max_attempts(self, tmp_path):
+        self._write_toml(tmp_path, '[retry]\nmax_attempts = 5')
+        cfg = load_series_config(tmp_path)
+        assert cfg['retry']['max_attempts'] == 5
+
+    # ── Timeouts ──────────────────────────────────────────────────────────────
+
+    def test_negative_worker_timeout_raises(self, tmp_path):
+        self._write_toml(tmp_path, '[gemini_cli]\nworker_timeout_seconds = -10')
+        with pytest.raises(ValueError, match="worker_timeout_seconds"):
+            load_series_config(tmp_path)
+
+    def test_zero_proofreading_timeout_raises(self, tmp_path):
+        self._write_toml(tmp_path, '[gemini_cli]\nproofreading_timeout_seconds = 0')
+        with pytest.raises(ValueError, match="proofreading_timeout_seconds"):
+            load_series_config(tmp_path)
+
+    def test_valid_float_timeout_passes(self, tmp_path):
+        """Timeouts can be floats, e.g. 0.5 for testing."""
+        self._write_toml(tmp_path, '[gemini_cli]\nworker_timeout_seconds = 30.5')
+        cfg = load_series_config(tmp_path)
+        assert cfg['gemini_cli']['worker_timeout_seconds'] == 30.5
+

@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Optional
 from book_translator.logger import system_logger
 from book_translator import db
 from book_translator import glossary_manager
+from book_translator.utils import parse_llm_json
 
 def collect_and_deduplicate_terms(workspace_paths: Dict[str, Any]) -> Dict[str, Any]:
     terms_dir = workspace_paths.get("terms")
@@ -113,7 +114,8 @@ def present_for_confirmation(new_terms: Dict[str, Any]) -> Optional[Dict[str, An
         except (ValueError, IndexError): system_logger.error("Ошибка: Неверный формат команды.")
 
 def update_glossary_file(new_terms: Dict[str, Any], db_path: Path, source_lang: str = 'ja', target_lang: str = 'ru'):
-    if not any(new_terms.values()): return
+    if not any(new_terms.values()):
+        return
     system_logger.info(f"\n[TermCollector] Обновление SQLite глоссария: {db_path}")
     for cat in ["characters", "terminology", "expressions"]:
         for term_id, term_data in new_terms.get(cat, {}).items():
@@ -121,38 +123,18 @@ def update_glossary_file(new_terms: Dict[str, Any], db_path: Path, source_lang: 
             term_ru = term_data.get("name", {}).get("ru", "")
             if term_jp and term_ru:
                 db.add_term(db_path, term_jp, term_ru, source_lang, target_lang)
-    system_logger.info(f"[TermCollector] Глоссарий успешно обновлен.")
-    if not any(new_terms.values()): return
-    system_logger.info(f"\n[TermCollector] Обновление SQLite глоссария: {db_path}")
-    for cat in ["characters", "terminology", "expressions"]:
-        for term_id, term_data in new_terms.get(cat, {}).items():
-            term_jp = term_data.get("name", {}).get("jp", "")
-            term_ru = term_data.get("name", {}).get("ru", "")
-            if term_jp and term_ru:
-                db.add_term(db_path, term_jp, term_ru, source_lang, target_lang)
-    system_logger.info(f"[TermCollector] Глоссарий успешно обновлен.")
+    system_logger.info("[TermCollector] Глоссарий успешно обновлен.")
 
 
 def collect_terms_from_responses(raw_responses: List[str]) -> Dict[str, Any]:
-    """Parse LLM JSON responses and deduplicate terms.
-    
-    Same JSON parsing + dedup logic as collect_and_deduplicate_terms,
-    but accepts raw response strings instead of reading from filesystem.
+    """Parse LLM JSON responses from gemini-cli and deduplicate terms.
+
+    Accepts raw response strings. Uses utils.parse_llm_json for robust parsing.
     """
     unique_terms = {}
     for response_str in raw_responses:
         try:
-            # Try to parse as JSON response object first (gemini-cli wraps output)
-            try:
-                cli_output = json.loads(response_str)
-                if isinstance(cli_output, dict) and "response" in cli_output:
-                    response_str = cli_output["response"]
-            except (json.JSONDecodeError, TypeError):
-                pass
-            
-            match = re.search(r'```json\s*\n(.*?)\s*\n```', response_str, re.DOTALL)
-            json_str = match.group(1) if match else response_str
-            data = json_repair.loads(json_str)
+            data = parse_llm_json(response_str)
             if not isinstance(data, dict):
                 continue
             for category, items in data.items():
@@ -162,7 +144,7 @@ def collect_terms_from_responses(raw_responses: List[str]) -> Dict[str, Any]:
                     if term_id not in unique_terms:
                         unique_terms[term_id] = {"category": category, "data": term_data}
         except Exception as e:
-            system_logger.warning(f"[TermCollector] Failed to parse response: {e}")
+            system_logger.warning(f"[TermCollector] Не удалось распарсить ответ: {e}")
     final_structure = {"characters": {}, "terminology": {}, "expressions": {}}
     for term_id, term_info in unique_terms.items():
         cat = term_info["category"]
