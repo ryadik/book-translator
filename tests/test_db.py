@@ -213,3 +213,44 @@ class TestChunkOperations:
     def test_get_empty_chapter_returns_empty_list(self, chunks_db):
         chunks = get_chunks(chunks_db, 'nonexistent')
         assert chunks == []
+
+
+from book_translator.db import set_chapter_stage, get_chapter_stage, reset_chapter_stage
+
+
+class TestChapterState:
+    @pytest.fixture
+    def chunks_db(self, tmp_path):
+        db = tmp_path / 'chunks.db'
+        init_chunks_db(db)
+        return db
+
+    def test_get_stage_default_is_none(self, chunks_db):
+        assert get_chapter_stage(chunks_db, 'chapter-01') is None
+
+    def test_set_and_get_stage(self, chunks_db):
+        set_chapter_stage(chunks_db, 'chapter-01', 'translation')
+        assert get_chapter_stage(chunks_db, 'chapter-01') == 'translation'
+
+    def test_set_stage_overwrites(self, chunks_db):
+        set_chapter_stage(chunks_db, 'chapter-01', 'discovery')
+        set_chapter_stage(chunks_db, 'chapter-01', 'translation')
+        assert get_chapter_stage(chunks_db, 'chapter-01') == 'translation'
+
+    def test_set_stage_different_chapters_isolated(self, chunks_db):
+        set_chapter_stage(chunks_db, 'chapter-01', 'complete')
+        set_chapter_stage(chunks_db, 'chapter-02', 'discovery')
+        assert get_chapter_stage(chunks_db, 'chapter-01') == 'complete'
+        assert get_chapter_stage(chunks_db, 'chapter-02') == 'discovery'
+
+    def test_reset_chapter_stage(self, chunks_db):
+        add_chunk(chunks_db, 'ch', 0, status='reading_done')
+        add_chunk(chunks_db, 'ch', 1, status='reading_done')
+        set_chapter_stage(chunks_db, 'ch', 'complete')
+
+        reset_chapter_stage(chunks_db, 'ch', 'translation', 'translation_pending')
+
+        assert get_chapter_stage(chunks_db, 'ch') == 'translation'
+        chunks = get_chunks(chunks_db, 'ch')
+        assert all(c['status'] == 'translation_pending' for c in chunks)
+
