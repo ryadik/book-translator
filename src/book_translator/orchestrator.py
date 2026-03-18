@@ -26,6 +26,17 @@ from book_translator.utils import parse_llm_json
 from book_translator.exceptions import TranslationLockedError
 
 
+def _find_tool_versions_dir() -> Optional[Path]:
+    """Walk up from this file to find a directory containing .tool-versions (for asdf)."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / '.tool-versions').exists():
+            return parent
+    return None
+
+
+_SUBPROCESS_CWD = _find_tool_versions_dir()
+
+
 def _run_single_worker(
     chunk: Dict[str, Any],
     prompt_template: str,
@@ -43,7 +54,8 @@ def _run_single_worker(
     retry_attempts: int = 3,
     retry_wait_min: int = 4,
     retry_wait_max: int = 10,
-    previous_context: str = ""
+    previous_context: str = "",
+    world_info_str: str = ""
 ) -> bool:
     worker_id = uuid.uuid4().hex[:6]
     chunk_index = chunk['chunk_index']
@@ -59,7 +71,7 @@ def _run_single_worker(
         )
         def _do_run():
             chunk_content = chunk['content_target'] if step_name == "reading" else chunk['content_source']
-            final_prompt = prompt_template.replace('{text}', chunk_content).replace('{glossary}', glossary_str).replace('{style_guide}', style_guide_str).replace('{previous_context}', previous_context)
+            final_prompt = prompt_template.replace('{text}', chunk_content).replace('{glossary}', glossary_str).replace('{style_guide}', style_guide_str).replace('{previous_context}', previous_context).replace('{world_info}', world_info_str)
 
             input_logger.info(f"[{worker_id}] --- PROMPT FOR: chunk_{chunk_index} ---\n{final_prompt}\n")
 
@@ -76,7 +88,7 @@ def _run_single_worker(
 
             try:
                 with rate_limiter:
-                    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', timeout=worker_timeout, check=True)
+                    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', timeout=worker_timeout, check=True, cwd=_SUBPROCESS_CWD)
                 return result.stdout, output_path, output_filename
             except subprocess.CalledProcessError as e:
                 system_logger.error(f"[Orchestrator] Воркер [id: {worker_id}] для chunk_{chunk_index} завершился с ошибкой (код: {e.returncode}).")
@@ -120,7 +132,9 @@ def _run_global_proofreading(
     rate_limiter: RateLimiter,
     proofreading_timeout: int = 300,
     progress=None,
-    task_id=None
+    task_id=None,
+    glossary_str: str = "",
+    style_guide_str: str = ""
 ) -> List[Dict[str, Any]]:
     system_logger.info("[Orchestrator] Запуск глобальной вычитки...")
 
@@ -130,14 +144,16 @@ def _run_global_proofreading(
         formatted_chunks.append(f"Chunk {chunk['chunk_index']}:\ncontent_source: {chunk['content_source']}\ncontent_target: {chunk['content_target']}\n")
 
     chunks_text = "\n".join(formatted_chunks)
-    final_prompt = prompt_template + "\n\n" + chunks_text
-    final_prompt = final_prompt.replace("content_en", "content_source")
+    final_prompt = (prompt_template
+                    .replace('{glossary}', glossary_str)
+                    .replace('{style_guide}', style_guide_str)
+                    + "\n\n" + chunks_text)
 
     command = ['gemini', '-m', model_name, '-p', final_prompt, '--output-format', 'json']
 
     try:
         with rate_limiter:
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', timeout=proofreading_timeout, check=True)
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', timeout=proofreading_timeout, check=True, cwd=_SUBPROCESS_CWD)
 
         diffs = parse_llm_json(result.stdout.strip())
 
@@ -185,6 +201,7 @@ def _run_workers_pooled(
     retry_wait_max: int = 10,
     glossary_str = "",
     style_guide_str = "",
+    world_info_str = "",
     contexts: Optional[Dict[int, str]] = None
 ):
     all_successful = True
@@ -215,7 +232,8 @@ def _run_workers_pooled(
                     retry_attempts,
                     retry_wait_min,
                     retry_wait_max,
-                    contexts.get(chunk['chunk_index'], "")
+                    contexts.get(chunk['chunk_index'], ""),
+                    world_info_str
                 ): chunk for chunk in chunks
             }
 
@@ -370,7 +388,7 @@ def run_translation_process(
                     max_workers, pending_chunks, term_prompt_template, "discovery", ".json",
                     {"output_format": "json"}, volume_paths, model_name, chunks_db, chapter_name,
                     rate_limiter, worker_timeout, retry_attempts, retry_wait_min, retry_wait_max,
-                    glossary_str=glossary_content
+                    glossary_str=glossary_content, style_guide_str=style_guide_content
                 )
                 if not success:
                     system_logger.error("[Orchestrator] Этап поиска терминов завершился с ошибками.")
@@ -417,7 +435,8 @@ def run_translation_process(
                     max_workers, pending_chunks, translation_prompt_template, "translation", ".txt",
                     {"output_format": "text"}, volume_paths, model_name, chunks_db, chapter_name,
                     rate_limiter, worker_timeout, retry_attempts, retry_wait_min, retry_wait_max,
-                    glossary_str=glossary_content, style_guide_str=style_guide_content, contexts=contexts
+                    glossary_str=glossary_content, style_guide_str=style_guide_content,
+                    world_info_str=world_info_content, contexts=contexts
                 )
                 if not success:
                     system_logger.error("[Orchestrator] Этап перевода завершился с ошибками.")
@@ -452,7 +471,8 @@ def run_translation_process(
                     max_workers, pending_chunks, proofreading_prompt_template, "reading", ".txt",
                     {"output_format": "text"}, volume_paths, model_name, chunks_db, chapter_name,
                     rate_limiter, worker_timeout, retry_attempts, retry_wait_min, retry_wait_max,
-                    glossary_str=glossary_content, style_guide_str=style_guide_content, contexts=contexts
+                    glossary_str=glossary_content, style_guide_str=style_guide_content,
+                    world_info_str=world_info_content, contexts=contexts
                 )
                 if not success:
                     system_logger.error("[Orchestrator] Этап вычитки завершился с ошибками.")
@@ -469,6 +489,8 @@ def run_translation_process(
             system_logger.info("\n--- ЭТАП 3.5: Глобальная вычитка текста ---")
 
             all_chunks = db.get_chunks(chunks_db, chapter_name)
+            terms = db.get_terms(glossary_db, source_lang, target_lang)
+            glossary_content = json.dumps([dict(t) for t in terms], ensure_ascii=False, indent=2)
 
             with create_progress() as progress:
                 task_id = progress.add_task("[cyan]Processing global proofreading...", total=1)
@@ -479,7 +501,9 @@ def run_translation_process(
                     rate_limiter,
                     proofreading_timeout,
                     progress,
-                    task_id
+                    task_id,
+                    glossary_str=glossary_content,
+                    style_guide_str=style_guide_content
                 )
 
             for chunk in updated_chunks:

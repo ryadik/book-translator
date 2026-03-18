@@ -12,9 +12,9 @@ def apply_diffs(chunks: list[dict[str, str | int]], diffs: list[dict[str, str | 
     - chunk_index: int
     - find: str
     - replace: str
-    
+
     A diff is only applied if the 'find' string appears exactly once in the
-    'content_ru' of the specified chunk.
+    'content_target' of the specified chunk.
     """
     updated_chunks = copy.deepcopy(chunks)
     
@@ -32,14 +32,14 @@ def apply_diffs(chunks: list[dict[str, str | int]], diffs: list[dict[str, str | 
             continue
             
         chunk = updated_chunks[chunk_idx]
-        content = str(chunk.get("content_ru", ""))
+        content = str(chunk.get("content_target", ""))
         find_str = str(find_str)
         replace_str = str(replace_str)
         
         occurrences = content.count(find_str)
         
         if occurrences == 1:
-            chunk["content_ru"] = content.replace(find_str, replace_str)
+            chunk["content_target"] = content.replace(find_str, replace_str)
             logger.info(f"Applied diff to chunk {chunk_idx}: replaced '{find_str}' with '{replace_str}'")
         elif occurrences == 0:
             logger.warning(f"Diff skipped: 'find' string not found in chunk {chunk_idx}. String: {find_str!r}")

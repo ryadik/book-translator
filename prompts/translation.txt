@@ -19,6 +19,10 @@ Consult this data for vocabulary consistency.
 {style_guide}
 </style_guide>
 
+<world_info>
+{world_info}
+</world_info>
+
 ---
 
 ## 4. EXECUTION ANCHORS (STRICT RULES)
@@ -120,8 +124,6 @@ Translate the following Source Fragment into Russian using the protocols above.
 </previous_context>
 
 <source_text>
-{text}
-</source_text>
 {text}
 </source_text>
 

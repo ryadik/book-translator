@@ -3,8 +3,8 @@ from book_translator.proofreader import apply_diffs
 
 def test_apply_diffs_exact_match():
     chunks = [
-        {"content_ru": "Это тестовое предложение."},
-        {"content_ru": "Второе предложение для теста."}
+        {"content_target": "Это тестовое предложение."},
+        {"content_target": "Второе предложение для теста."}
     ]
     diffs = [
         {"chunk_index": 0, "find": "тестовое", "replace": "проверочное"},
@@ -13,14 +13,14 @@ def test_apply_diffs_exact_match():
     
     updated_chunks = apply_diffs(chunks, diffs)
     
-    assert updated_chunks[0]["content_ru"] == "Это проверочное предложение."
-    assert updated_chunks[1]["content_ru"] == "Второе предложение для проверки."
+    assert updated_chunks[0]["content_target"] == "Это проверочное предложение."
+    assert updated_chunks[1]["content_target"] == "Второе предложение для проверки."
     # Ensure original chunks are not mutated
-    assert chunks[0]["content_ru"] == "Это тестовое предложение."
+    assert chunks[0]["content_target"] == "Это тестовое предложение."
 
 def test_apply_diffs_zero_matches():
     chunks = [
-        {"content_ru": "Это тестовое предложение."}
+        {"content_target": "Это тестовое предложение."}
     ]
     diffs = [
         {"chunk_index": 0, "find": "отсутствующее", "replace": "новое"}
@@ -29,11 +29,11 @@ def test_apply_diffs_zero_matches():
     updated_chunks = apply_diffs(chunks, diffs)
     
     # Should remain unchanged
-    assert updated_chunks[0]["content_ru"] == "Это тестовое предложение."
+    assert updated_chunks[0]["content_target"] == "Это тестовое предложение."
 
 def test_apply_diffs_multiple_matches():
     chunks = [
-        {"content_ru": "Слово повторяется. Слово снова здесь."}
+        {"content_target": "Слово повторяется. Слово снова здесь."}
     ]
     diffs = [
         {"chunk_index": 0, "find": "Слово", "replace": "Термин"}
@@ -42,11 +42,11 @@ def test_apply_diffs_multiple_matches():
     updated_chunks = apply_diffs(chunks, diffs)
     
     # Should remain unchanged because "Слово" appears twice
-    assert updated_chunks[0]["content_ru"] == "Слово повторяется. Слово снова здесь."
+    assert updated_chunks[0]["content_target"] == "Слово повторяется. Слово снова здесь."
 
 def test_apply_diffs_invalid_index():
     chunks = [
-        {"content_ru": "Это тестовое предложение."}
+        {"content_target": "Это тестовое предложение."}
     ]
     diffs = [
         {"chunk_index": 5, "find": "тестовое", "replace": "проверочное"},
@@ -56,11 +56,11 @@ def test_apply_diffs_invalid_index():
     updated_chunks = apply_diffs(chunks, diffs)
     
     # Should remain unchanged
-    assert updated_chunks[0]["content_ru"] == "Это тестовое предложение."
+    assert updated_chunks[0]["content_target"] == "Это тестовое предложение."
 
 def test_apply_diffs_missing_keys():
     chunks = [
-        {"content_ru": "Это тестовое предложение."}
+        {"content_target": "Это тестовое предложение."}
     ]
     diffs = [
         {"chunk_index": 0, "find": "тестовое"}, # Missing replace
@@ -71,11 +71,11 @@ def test_apply_diffs_missing_keys():
     updated_chunks = apply_diffs(chunks, diffs)
     
     # Should remain unchanged
-    assert updated_chunks[0]["content_ru"] == "Это тестовое предложение."
+    assert updated_chunks[0]["content_target"] == "Это тестовое предложение."
 
 def test_apply_diffs_multiple_diffs_same_chunk():
     chunks = [
-        {"content_ru": "Первое слово и второе слово."}
+        {"content_target": "Первое слово и второе слово."}
     ]
     diffs = [
         {"chunk_index": 0, "find": "Первое", "replace": "Один"},
@@ -84,4 +84,4 @@ def test_apply_diffs_multiple_diffs_same_chunk():
     
     updated_chunks = apply_diffs(chunks, diffs)
     
-    assert updated_chunks[0]["content_ru"] == "Один слово и два слово."
+    assert updated_chunks[0]["content_target"] == "Один слово и два слово."

@@ -32,6 +32,10 @@ Consult this data for vocabulary consistency.
 {style_guide}
 </style_guide>
 
+<world_info>
+{world_info}
+</world_info>
+
 ---
 
 ## 4. EXECUTION ANCHORS (STRICT RULES)
@@ -135,8 +139,6 @@ Translate the following Source Fragment into Russian using the protocols above.
 <source_text>
 {text}
 </source_text>
-{text}
-</source_text>
 
 ---
 
@@ -166,7 +168,7 @@ Provide the Russian version stream exclusively as raw text. Do not include markd
 TERM_DISCOVERY_PROMPT = r"""**I. РОЛЬ И ГЛАВНАЯ ЦЕЛЬ**
 
 **1. Твоя Личность:**
-Ты — **Эксперт-Терминолог и Аналитик Мира**, специализирующийся на вселенной "DanMachi". Твоя задача — отделить "зерна от плевел": найти в тексте только действительно значимые сущности, требующие фиксации в глоссарии, и отбросить всё несущественное.
+Ты — **Эксперт-Терминолог и Аналитик Мира**. Твоя задача — отделить "зерна от плевел": найти в тексте только действительно значимые сущности, требующие фиксации в глоссарии, и отбросить всё несущественное.
 
 **2. Твоя Задача:**
 Проанализировать фрагмент текста и извлечь из него **только имена собственные (персонажи, локации), названия (организаций, предметов, навыков) и уникальные термины**.
@@ -207,7 +209,11 @@ TERM_DISCOVERY_PROMPT = r"""**I. РОЛЬ И ГЛАВНАЯ ЦЕЛЬ**
     ```json
     {glossary}
     ```
-2.   **Фрагмент текста для анализа:** 
+2.   **Стиль-гайд (правила транскрипции и оформления):**
+    ```
+    {style_guide}
+    ```
+3.   **Фрагмент текста для анализа:**
     ```
     {text}
     ```
@@ -221,44 +227,44 @@ TERM_DISCOVERY_PROMPT = r"""**I. РОЛЬ И ГЛАВНАЯ ЦЕЛЬ**
 
 **Пример требуемого формата вывода:**
 ```json
-{{
-  "characters": {{
-    "aizu_varenshutain": {{
-      "name": {{
+{
+  "characters": {
+    "aizu_varenshutain": {
+      "name": {
         "ru": "Айз Валенштайн",
         "jp": "アイズ・ヴァレンシュタイン",
         "romaji": "Aizu Varenshutain"
-      }},
+      },
       "aliases": [],
       "description": "Предположительно, главная героиня этого фрагмента, переживающая травматичное воспоминание.",
       "context": "Имя 'Айз' многократно повторяется в тексте, она является центральным действующим лицом сцены.",
-      "characteristics": {{
+      "characteristics": {
         "gender": "Ж",
         "affiliation": "Неизвестно",
         "level": null,
         "race": "Человек"
-      }}
-    }},
-    "aria": {{
-       "name": {{
+      }
+    },
+    "aria": {
+       "name": {
         "ru": "Ариа",
         "jp": "アリア",
         "romaji": "Aria"
-      }},
+      },
       "aliases": [],
       "description": "Имя, которое выкрикивает '禍々しい何か' в конце сцены.",
       "context": "Это имя было произнесено зловещим существом, которое наблюдало за кошмаром Айз.",
-      "characteristics": {{
+      "characteristics": {
         "gender": "Ж",
         "affiliation": "Неизвестно",
         "level": null,
         "race": "Неизвестно"
-      }}
-    }}
-  }},
-  "terminology": {{}},
-  "expressions": {{}}
-}}
+      }
+    }
+  },
+  "terminology": {},
+  "expressions": {}
+}
 ```
 """
 
@@ -282,6 +288,10 @@ Consult this data for vocabulary consistency.
 <style_guide>
 {style_guide}
 </style_guide>
+
+<world_info>
+{world_info}
+</world_info>
 
 ---
 
@@ -380,8 +390,6 @@ Proofread and polish the following Russian text using the protocols above.
 <source_text>
 {text}
 </source_text>
-{text}
-</source_text>
 
 ---
 
@@ -407,15 +415,34 @@ Before generation, pass the text through the following strict compliance filters
 Provide the polished Russian version stream exclusively as raw text. Do not include markdown wrappers like ```text.
 """
 
-GLOBAL_PROOFREADING_PROMPT = r"""You are an expert Russian proofreader and editor. Your task is to review the translated text of an entire chapter and ensure consistency, flow, and accuracy.
+GLOBAL_PROOFREADING_PROMPT = r"""You are an expert Russian literary editor. Your task is to review the translated text of an entire chapter and ensure cross-chunk consistency, stylistic uniformity, and compliance with the glossary and style guide.
 
-You will be provided with the chapter broken down into chunks. Each chunk has an index (`chunk_index`), the original English text (`content_en`), and the current Russian translation (`content_ru`).
+## REFERENCE DATA
 
-Your goal is to identify any errors, inconsistencies, or awkward phrasing in the Russian translation and provide corrections.
+<glossary>
+{glossary}
+</glossary>
 
-IMPORTANT: You must return your corrections as a JSON array of diff objects. Do NOT return the entire corrected text. This is to save output tokens.
+<style_guide>
+{style_guide}
+</style_guide>
 
-Each diff object in the JSON array must have the following structure:
+## YOUR OBJECTIVES
+
+1. **Glossary compliance:** Verify all proper nouns, character names, and terms match the glossary exactly. Correct any discrepancies.
+2. **Cross-chunk consistency:** Identify names, terms, or phrases used inconsistently across different chunks and unify them.
+3. **Typography enforcement:** Ensure the following rules are applied throughout:
+   - Dialogue speech uses `─` (U+2500) as the sole separator between speech and narration. The em-dash (`—`) is forbidden.
+   - Thoughts, titles, and inscriptions use guillemets `«...»`.
+   - No quotation marks around spoken speech.
+4. **Style guide adherence:** Ensure all rules from the style guide are followed.
+5. **Flow and phrasing:** Fix awkward or unnatural phrasing that disrupts reading flow.
+
+## OUTPUT FORMAT
+
+IMPORTANT: Return your corrections as a JSON array of diff objects. Do NOT return the entire corrected text.
+
+Each diff object must have the following structure:
 [
   {
     "chunk_index": 0,
@@ -425,7 +452,7 @@ Each diff object in the JSON array must have the following structure:
 ]
 
 RULES FOR DIFFS:
-1. The `find` string MUST appear EXACTLY ONCE in the `content_ru` of the specified `chunk_index`. If it appears zero times or more than once, the diff will be rejected by the system.
+1. The `find` string MUST appear EXACTLY ONCE in the `content_target` of the specified `chunk_index`. If it appears zero times or more than once, the diff will be rejected by the system.
 2. Make the `find` string long enough to be unique within the chunk, but short enough to be concise. Usually, a full sentence or a distinct phrase is best.
 3. Do not include leading or trailing whitespace in the `find` string unless it is necessary for uniqueness.
 4. If no corrections are needed, return an empty JSON array: []
@@ -433,19 +460,24 @@ RULES FOR DIFFS:
 
 Example Input:
 Chunk 0:
-content_en: "The quick brown fox jumps over the lazy dog."
-content_ru: "Быстрая коричневая лиса прыгает через ленивую собаку."
+content_source: "She said hello."
+content_target: "— Привет, — сказала она."
 
 Chunk 1:
-content_en: "It was a dark and stormy night."
-content_ru: "Это была темная и штормовая ночь."
+content_source: "It was a dark and stormy night."
+content_target: "Это была темная и штормовая ночь."
 
 Example Output:
 [
   {
+    "chunk_index": 0,
+    "find": "— Привет, — сказала она.",
+    "replace": "─ Привет, ─ сказала она."
+  },
+  {
     "chunk_index": 1,
     "find": "штормовая",
-    "replace": "буряная"
+    "replace": "бурная"
   }
 ]
 """
