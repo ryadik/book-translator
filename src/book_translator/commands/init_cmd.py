@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 try:
@@ -34,12 +35,28 @@ WORLD_INFO_TEMPLATE = '''# Информация о мире
 (Перечислите главных персонажей с краткими описаниями)
 '''
 
-STYLE_GUIDE_TEMPLATE = '''# Стайлгайд перевода
+STYLE_GUIDE_TEMPLATE = '''## Стайлгайд перевода
 
-## Общие правила
-- Сохраняйте японские суффиксы обращения (-сан, -кун, -тян)
-- Используйте «ёлочки» для прямой речи
+### 1. Пунктуация
+- **Тире в диалогах:** Использовать оператор звука (`─`, U+2500).
+- **Мысли и названия:** Кавычки-«ёлочки» (`«...»`).
+
+### 2. Общие правила
+- Литературный перевод, не дословный.
+- Обязательно использовать букву «ё».
 '''
+
+
+def _find_bundled_style_guide(source_lang: str, target_lang: str) -> Path | None:
+    """Find bundled style guide for the given language pair."""
+    style_guides_dir = Path(__file__).resolve().parent.parent.parent.parent / 'data' / 'style_guides'
+    exact = style_guides_dir / f'{source_lang}_{target_lang}.md'
+    if exact.is_file():
+        return exact
+    default = style_guides_dir / 'default.md'
+    if default.is_file():
+        return default
+    return None
 
 def run_init(args):
     series_dir = Path.cwd() / args.name
@@ -61,7 +78,11 @@ def run_init(args):
     
     # Write template files
     (series_dir / 'world_info.md').write_text(WORLD_INFO_TEMPLATE, encoding='utf-8')
-    (series_dir / 'style_guide.md').write_text(STYLE_GUIDE_TEMPLATE, encoding='utf-8')
+    bundled_guide = _find_bundled_style_guide(args.source_lang, args.target_lang)
+    if bundled_guide:
+        shutil.copy2(bundled_guide, series_dir / 'style_guide.md')
+    else:
+        (series_dir / 'style_guide.md').write_text(STYLE_GUIDE_TEMPLATE, encoding='utf-8')
     
     # Create prompts directory (empty — user places overrides here)
     (series_dir / 'prompts').mkdir()

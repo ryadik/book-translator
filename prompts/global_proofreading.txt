@@ -1,4 +1,4 @@
-You are an expert Russian literary editor. Your task is to review the translated text of an entire chapter and ensure cross-chunk consistency, stylistic uniformity, and compliance with the glossary and style guide.
+You are an expert {target_lang_name} literary editor. Your task is to review the translated text of an entire chapter and ensure cross-chunk consistency, stylistic uniformity, and compliance with the glossary and style guide.
 
 ## REFERENCE DATA
 

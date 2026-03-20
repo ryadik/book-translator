@@ -19,6 +19,7 @@ def convert_txt_to_epub(
     output_file: Path,
     title: str,
     author: str = '',
+    language: str = 'ru',
 ) -> None:
     """Convert a plain text file to an EPUB file.
 
@@ -48,7 +49,7 @@ def convert_txt_to_epub(
     # Build EPUB
     book = epub.EpubBook()
     book.set_title(title)
-    book.set_language('ru')
+    book.set_language(language)
     if author:
         book.add_author(author)
 
@@ -70,7 +71,7 @@ def convert_txt_to_epub(
     chapter = epub.EpubHtml(
         title=title,
         file_name='chapter.xhtml',
-        lang='ru',
+        lang=language,
     )
     chapter.set_content(html_content)
     book.add_item(chapter)

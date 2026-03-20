@@ -63,7 +63,7 @@ def generate_approval_tsv(terms: List[Dict], output_path: Path):
         f.write('# Формат: исходный_термин<TAB>перевод<TAB>комментарий\n')
         f.write(TSV_HEADER + '\n')
         for term in terms:
-            source = term.get('term_jp', term.get('term_source', ''))
-            target = term.get('term_ru', term.get('term_target', ''))
+            source = term.get('term_source') or term.get('term_jp', '')
+            target = term.get('term_target') or term.get('term_ru', '')
             comment = term.get('comment', '')
             f.write(f"{source}\t{target}\t{comment}\n")

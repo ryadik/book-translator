@@ -12,6 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from typing import Dict, Any, List, Optional
 
 from book_translator.logger import setup_loggers, system_logger, input_logger, output_logger
+from book_translator.languages import get_typography_rules, get_language_name
 from book_translator import chapter_splitter
 from book_translator.tui import create_progress
 from book_translator import term_collector
@@ -55,7 +56,10 @@ def _run_single_worker(
     retry_wait_min: int = 4,
     retry_wait_max: int = 10,
     previous_context: str = "",
-    world_info_str: str = ""
+    world_info_str: str = "",
+    typography_rules_str: str = "",
+    target_lang_name: str = "Russian",
+    source_lang_name: str = "Japanese"
 ) -> bool:
     worker_id = uuid.uuid4().hex[:6]
     chunk_index = chunk['chunk_index']
@@ -71,7 +75,7 @@ def _run_single_worker(
         )
         def _do_run():
             chunk_content = chunk['content_target'] if step_name == "reading" else chunk['content_source']
-            final_prompt = prompt_template.replace('{text}', chunk_content).replace('{glossary}', glossary_str).replace('{style_guide}', style_guide_str).replace('{previous_context}', previous_context).replace('{world_info}', world_info_str)
+            final_prompt = prompt_template.replace('{text}', chunk_content).replace('{glossary}', glossary_str).replace('{style_guide}', style_guide_str).replace('{previous_context}', previous_context).replace('{world_info}', world_info_str).replace('{typography_rules}', typography_rules_str).replace('{target_lang_name}', target_lang_name).replace('{source_lang_name}', source_lang_name)
 
             input_logger.info(f"[{worker_id}] --- PROMPT FOR: chunk_{chunk_index} ---\n{final_prompt}\n")
 
@@ -134,7 +138,8 @@ def _run_global_proofreading(
     progress=None,
     task_id=None,
     glossary_str: str = "",
-    style_guide_str: str = ""
+    style_guide_str: str = "",
+    target_lang_name: str = "Russian"
 ) -> List[Dict[str, Any]]:
     system_logger.info("[Orchestrator] Запуск глобальной вычитки...")
 
@@ -147,6 +152,7 @@ def _run_global_proofreading(
     final_prompt = (prompt_template
                     .replace('{glossary}', glossary_str)
                     .replace('{style_guide}', style_guide_str)
+                    .replace('{target_lang_name}', target_lang_name)
                     + "\n\n" + chunks_text)
 
     command = ['gemini', '-m', model_name, '-p', final_prompt, '--output-format', 'json']
@@ -202,6 +208,9 @@ def _run_workers_pooled(
     glossary_str = "",
     style_guide_str = "",
     world_info_str = "",
+    typography_rules_str = "",
+    target_lang_name: str = "Russian",
+    source_lang_name: str = "Japanese",
     contexts: Optional[Dict[int, str]] = None
 ):
     all_successful = True
@@ -233,7 +242,10 @@ def _run_workers_pooled(
                     retry_wait_min,
                     retry_wait_max,
                     contexts.get(chunk['chunk_index'], ""),
-                    world_info_str
+                    world_info_str,
+                    typography_rules_str,
+                    target_lang_name,
+                    source_lang_name
                 ): chunk for chunk in chunks
             }
 
@@ -283,6 +295,9 @@ def run_translation_process(
     retry_wait_max = cfg.get('retry', {}).get('wait_max_seconds', 10)
     source_lang = cfg.get('series', {}).get('source_lang', 'ja')
     target_lang = cfg.get('series', {}).get('target_lang', 'ru')
+    typography_rules = get_typography_rules(target_lang)
+    target_lang_name = get_language_name(target_lang)
+    source_lang_name = get_language_name(source_lang)
     debug_mode = debug
 
     volume_name, chapter_name = path_resolver.resolve_volume_from_chapter(series_root, chapter_path)
@@ -388,7 +403,9 @@ def run_translation_process(
                     max_workers, pending_chunks, term_prompt_template, "discovery", ".json",
                     {"output_format": "json"}, volume_paths, model_name, chunks_db, chapter_name,
                     rate_limiter, worker_timeout, retry_attempts, retry_wait_min, retry_wait_max,
-                    glossary_str=glossary_content, style_guide_str=style_guide_content
+                    glossary_str=glossary_content, style_guide_str=style_guide_content,
+                    typography_rules_str=typography_rules,
+                    target_lang_name=target_lang_name, source_lang_name=source_lang_name
                 )
                 if not success:
                     system_logger.error("[Orchestrator] Этап поиска терминов завершился с ошибками.")
@@ -436,7 +453,9 @@ def run_translation_process(
                     {"output_format": "text"}, volume_paths, model_name, chunks_db, chapter_name,
                     rate_limiter, worker_timeout, retry_attempts, retry_wait_min, retry_wait_max,
                     glossary_str=glossary_content, style_guide_str=style_guide_content,
-                    world_info_str=world_info_content, contexts=contexts
+                    world_info_str=world_info_content, typography_rules_str=typography_rules,
+                    target_lang_name=target_lang_name, source_lang_name=source_lang_name,
+                    contexts=contexts
                 )
                 if not success:
                     system_logger.error("[Orchestrator] Этап перевода завершился с ошибками.")
@@ -472,7 +491,9 @@ def run_translation_process(
                     {"output_format": "text"}, volume_paths, model_name, chunks_db, chapter_name,
                     rate_limiter, worker_timeout, retry_attempts, retry_wait_min, retry_wait_max,
                     glossary_str=glossary_content, style_guide_str=style_guide_content,
-                    world_info_str=world_info_content, contexts=contexts
+                    world_info_str=world_info_content, typography_rules_str=typography_rules,
+                    target_lang_name=target_lang_name, source_lang_name=source_lang_name,
+                    contexts=contexts
                 )
                 if not success:
                     system_logger.error("[Orchestrator] Этап вычитки завершился с ошибками.")
@@ -503,7 +524,8 @@ def run_translation_process(
                     progress,
                     task_id,
                     glossary_str=glossary_content,
-                    style_guide_str=style_guide_content
+                    style_guide_str=style_guide_content,
+                    target_lang_name=target_lang_name
                 )
 
             for chunk in updated_chunks:
