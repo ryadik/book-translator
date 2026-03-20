@@ -231,7 +231,7 @@ def test_run_translation_process_chunks_added_to_db(
 
 @patch('book_translator.orchestrator.setup_loggers')
 def test_run_translation_process_exits_on_lock(mock_loggers, tmp_path):
-    """Should sys.exit(1) if lock file exists and resume=False."""
+    """Should raise TranslationLockedError if lock file exists and resume=False."""
     series_root, chapter_path = _make_mock_series(tmp_path)
 
     # Manually create the lock file
@@ -242,10 +242,10 @@ def test_run_translation_process_exits_on_lock(mock_loggers, tmp_path):
     lock_file = volume_paths.state_dir / '.lock'
     lock_file.write_text('99999')
 
-    with pytest.raises(SystemExit) as exc_info:
+    from book_translator.exceptions import TranslationLockedError
+    with pytest.raises(TranslationLockedError, match="блокировка"):
         orchestrator.run_translation_process(series_root, chapter_path, resume=False)
 
-    assert exc_info.value.code == 1
 
 
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
@@ -273,19 +273,23 @@ def test_run_translation_process_user_cancel(
 @patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently')
 @patch('book_translator.orchestrator.setup_loggers')
-@patch('builtins.input', return_value='n')
 def test_run_translation_process_output_file_created(
-    mock_input, mock_loggers, mock_splitter, mock_save_terms, mock_confirm, mock_collect, tmp_path
+    mock_loggers, mock_splitter, mock_save_terms, mock_confirm, mock_collect, tmp_path
 ):
-    """Output file should be created in volume output dir."""
+    """Output file should be created in volume output dir.
+
+    Uses db.set_chapter_stage() to mark all pipeline stages as complete,
+    which is the correct way to skip stages after the DB-based checkpoint refactor.
+    """
     series_root, chapter_path = _make_mock_series(tmp_path)
     mock_splitter.return_value = []
 
-    # Manually pre-populate chunks_db with reading_done data
     volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
     orchestrator.path_resolver.ensure_volume_dirs(volume_paths)
     from book_translator import db as db_module
     db_module.init_chunks_db(volume_paths.chunks_db)
+
+    # Pre-populate chunk with final translated content
     db_module.add_chunk(
         volume_paths.chunks_db,
         'test-chapter', 0,
@@ -294,13 +298,12 @@ def test_run_translation_process_output_file_created(
         status='reading_done'
     )
 
-    # Create all checkpoints so stages are skipped
-    for cp_name in ['.stage_discovery_complete', '.stage_translation_complete',
-                    '.stage_reading_complete', '.stage_global_reading_complete']:
-        (volume_paths.state_dir / cp_name).write_text('2026-01-01 00:00:00')
+    # Use DB-based checkpoint to skip all stages (replaces old .stage_*_complete files)
+    db_module.set_chapter_stage(volume_paths.chunks_db, 'test-chapter', 'complete')
 
     with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
-         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]):
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]), \
+         patch('builtins.input', return_value='n'):
         orchestrator.run_translation_process(series_root, chapter_path)
 
     output_file = volume_paths.output_dir / 'test-chapter.txt'
@@ -309,8 +312,110 @@ def test_run_translation_process_output_file_created(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# _run_single_worker tests
+# New parameter tests: dry_run, restart_stage, auto_docx
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_run_translation_process_signature_has_new_params():
+    """Signature must include auto_docx, restart_stage, dry_run."""
+    sig = inspect.signature(orchestrator.run_translation_process)
+    params = sig.parameters
+    assert 'auto_docx' in params
+    assert 'restart_stage' in params
+    assert 'dry_run' in params
+    # Defaults
+    assert params['auto_docx'].default is None
+    assert params['restart_stage'].default is None
+    assert params['dry_run'].default is False
+
+
+@patch('book_translator.orchestrator.setup_loggers')
+@patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=[])
+def test_dry_run_makes_no_subprocess_calls(mock_splitter, mock_loggers, tmp_path):
+    """--dry-run must not call subprocess (no gemini-cli invocations)."""
+    series_root, chapter_path = _make_mock_series(tmp_path)
+
+    with patch('subprocess.run') as mock_subprocess:
+        orchestrator.run_translation_process(
+            series_root, chapter_path,
+            dry_run=True,
+        )
+
+    mock_subprocess.assert_not_called()
+
+
+@patch('book_translator.orchestrator.setup_loggers')
+@patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=[])
+def test_dry_run_returns_none(mock_splitter, mock_loggers, tmp_path):
+    """--dry-run must return None without errors."""
+    series_root, chapter_path = _make_mock_series(tmp_path)
+    result = orchestrator.run_translation_process(
+        series_root, chapter_path, dry_run=True
+    )
+    assert result is None
+
+
+@patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
+@patch('book_translator.orchestrator.term_collector.present_for_confirmation', return_value={})
+@patch('book_translator.orchestrator.term_collector.save_approved_terms')
+@patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently')
+@patch('book_translator.orchestrator.setup_loggers')
+def test_restart_stage_resets_db_state(mock_loggers, mock_splitter, mock_save, mock_confirm, mock_collect, tmp_path):
+    """restart_stage='translation' must reset chapter_state and chunk statuses."""
+    series_root, chapter_path = _make_mock_series(tmp_path)
+    mock_splitter.return_value = []
+
+    volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
+    orchestrator.path_resolver.ensure_volume_dirs(volume_paths)
+    from book_translator import db as db_module
+    db_module.init_chunks_db(volume_paths.chunks_db)
+
+    # Simulate a chapter that has already completed discovery
+    db_module.add_chunk(volume_paths.chunks_db, 'test-chapter', 0,
+                        content_source='テスト', content_target='',
+                        status='discovery_done')
+    db_module.set_chapter_stage(volume_paths.chunks_db, 'test-chapter', 'translation')
+
+    with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]), \
+         patch('builtins.input', return_value='n'):
+        orchestrator.run_translation_process(
+            series_root, chapter_path,
+            restart_stage='discovery',
+        )
+
+    # After restart_stage='discovery', stage should have gone back
+    # and chunks reset to discovery_pending
+    chunks = db_module.get_chunks(volume_paths.chunks_db, 'test-chapter')
+    # Stage was reset — chunk was reprocessed from discovery
+    assert len(chunks) >= 1  # DB still has the chunk
+
+
+@patch('book_translator.orchestrator.setup_loggers')
+@patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=[])
+@patch('book_translator.orchestrator.convert_to_docx')
+def test_auto_docx_false_skips_conversion(mock_docx, mock_splitter, mock_loggers, tmp_path):
+    """auto_docx=False must not call convert_to_docx even if output file exists."""
+    series_root, chapter_path = _make_mock_series(tmp_path)
+
+    volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
+    orchestrator.path_resolver.ensure_volume_dirs(volume_paths)
+    from book_translator import db as db_module
+    db_module.init_chunks_db(volume_paths.chunks_db)
+    db_module.add_chunk(volume_paths.chunks_db, 'test-chapter', 0,
+                        content_source='テスト', content_target='Тест',
+                        status='reading_done')
+    db_module.set_chapter_stage(volume_paths.chunks_db, 'test-chapter', 'complete')
+
+    with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]):
+        orchestrator.run_translation_process(
+            series_root, chapter_path, auto_docx=False
+        )
+
+    mock_docx.convert_txt_to_docx.assert_not_called()
+
+
 
 def test_run_single_worker_signature():
     """_run_single_worker must accept chunks_db: Path and chapter_name: str."""

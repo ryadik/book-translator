@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Optional
 from book_translator.logger import system_logger
 from book_translator import db
 from book_translator import glossary_manager
+from book_translator.utils import parse_llm_json
 
 def collect_and_deduplicate_terms(workspace_paths: Dict[str, Any]) -> Dict[str, Any]:
     terms_dir = workspace_paths.get("terms")
@@ -40,7 +41,7 @@ def collect_and_deduplicate_terms(workspace_paths: Dict[str, Any]) -> Dict[str, 
 
 def _edit_term(term_data: Dict[str, Any]) -> Dict[str, Any]:
     system_logger.info("\n--- Редактирование термина ---")
-    for key in ["ru", "jp", "romaji"]:
+    for key in ["source", "target", "romanization"]:
         new_val = input(f"  name.{key} (Enter, чтобы оставить '{term_data['name'].get(key, '')}'): ").strip()
         if new_val: term_data['name'][key] = new_val
     new_desc = input(f"  description (Enter, чтобы оставить '{term_data.get('description', '')}'): ").strip()
@@ -76,9 +77,9 @@ def present_for_confirmation(new_terms: Dict[str, Any]) -> Optional[Dict[str, An
         system_logger.info("\n" + "="*40 + "\n  Найдены новые термины для подтверждения\n" + "="*40)
         for i, term in enumerate(term_list):
             term_data = term['data']
-            jp_name = term_data.get('name', {}).get('jp') or term_data.get('term_jp', 'N/A')
-            ru_name = term_data.get('name', {}).get('ru') or term_data.get('term_ru', 'N/A')
-            system_logger.info(f"\n--- Термин #{i+1} ---\n  ID: {term['id']} (Категория: {term['category']})\n  JP: {jp_name}\n  RU: {ru_name}\n  Описание: {term_data.get('description', 'N/A')}\n  Контекст: {term_data.get('context', 'N/A')}")
+            source_name = term_data.get('name', {}).get('source') or term_data.get('term_source', 'N/A')
+            target_name = term_data.get('name', {}).get('target') or term_data.get('term_target', 'N/A')
+            system_logger.info(f"\n--- Термин #{i+1} ---\n  ID: {term['id']} (Категория: {term['category']})\n  Source: {source_name}\n  Target: {target_name}\n  Описание: {term_data.get('description', 'N/A')}\n  Контекст: {term_data.get('context', 'N/A')}")
         system_logger.info("\n" + "-"*40 + "\n  Команды: ok, del <номера>, edit <номер>, quit\n" + "-"*40)
         try: 
             if os.environ.get('AUTO_ACCEPT_TERMS') == '1':
@@ -113,46 +114,27 @@ def present_for_confirmation(new_terms: Dict[str, Any]) -> Optional[Dict[str, An
         except (ValueError, IndexError): system_logger.error("Ошибка: Неверный формат команды.")
 
 def update_glossary_file(new_terms: Dict[str, Any], db_path: Path, source_lang: str = 'ja', target_lang: str = 'ru'):
-    if not any(new_terms.values()): return
+    if not any(new_terms.values()):
+        return
     system_logger.info(f"\n[TermCollector] Обновление SQLite глоссария: {db_path}")
     for cat in ["characters", "terminology", "expressions"]:
         for term_id, term_data in new_terms.get(cat, {}).items():
-            term_jp = term_data.get("name", {}).get("jp", "")
-            term_ru = term_data.get("name", {}).get("ru", "")
-            if term_jp and term_ru:
-                db.add_term(db_path, term_jp, term_ru, source_lang, target_lang)
-    system_logger.info(f"[TermCollector] Глоссарий успешно обновлен.")
-    if not any(new_terms.values()): return
-    system_logger.info(f"\n[TermCollector] Обновление SQLite глоссария: {db_path}")
-    for cat in ["characters", "terminology", "expressions"]:
-        for term_id, term_data in new_terms.get(cat, {}).items():
-            term_jp = term_data.get("name", {}).get("jp", "")
-            term_ru = term_data.get("name", {}).get("ru", "")
-            if term_jp and term_ru:
-                db.add_term(db_path, term_jp, term_ru, source_lang, target_lang)
-    system_logger.info(f"[TermCollector] Глоссарий успешно обновлен.")
+            term_source = term_data.get("name", {}).get("source") or term_data.get("name", {}).get("jp", "")
+            term_target = term_data.get("name", {}).get("target") or term_data.get("name", {}).get("ru", "")
+            if term_source and term_target:
+                db.add_term(db_path, term_source, term_target, source_lang, target_lang)
+    system_logger.info("[TermCollector] Глоссарий успешно обновлен.")
 
 
 def collect_terms_from_responses(raw_responses: List[str]) -> Dict[str, Any]:
-    """Parse LLM JSON responses and deduplicate terms.
-    
-    Same JSON parsing + dedup logic as collect_and_deduplicate_terms,
-    but accepts raw response strings instead of reading from filesystem.
+    """Parse LLM JSON responses from gemini-cli and deduplicate terms.
+
+    Accepts raw response strings. Uses utils.parse_llm_json for robust parsing.
     """
     unique_terms = {}
     for response_str in raw_responses:
         try:
-            # Try to parse as JSON response object first (gemini-cli wraps output)
-            try:
-                cli_output = json.loads(response_str)
-                if isinstance(cli_output, dict) and "response" in cli_output:
-                    response_str = cli_output["response"]
-            except (json.JSONDecodeError, TypeError):
-                pass
-            
-            match = re.search(r'```json\s*\n(.*?)\s*\n```', response_str, re.DOTALL)
-            json_str = match.group(1) if match else response_str
-            data = json_repair.loads(json_str)
+            data = parse_llm_json(response_str)
             if not isinstance(data, dict):
                 continue
             for category, items in data.items():
@@ -162,7 +144,7 @@ def collect_terms_from_responses(raw_responses: List[str]) -> Dict[str, Any]:
                     if term_id not in unique_terms:
                         unique_terms[term_id] = {"category": category, "data": term_data}
         except Exception as e:
-            system_logger.warning(f"[TermCollector] Failed to parse response: {e}")
+            system_logger.warning(f"[TermCollector] Не удалось распарсить ответ: {e}")
     final_structure = {"characters": {}, "terminology": {}, "expressions": {}}
     for term_id, term_info in unique_terms.items():
         cat = term_info["category"]
@@ -180,13 +162,15 @@ def save_approved_terms(terms: Dict[str, Any], glossary_db: Path,
     count = 0
     for category, items in terms.items():
         for term_id, term_data in items.items():
-            term_source = term_data.get('name', {}).get('jp') or \
-                          term_data.get('term_jp') or \
+            term_source = term_data.get('name', {}).get('source') or \
+                          term_data.get('name', {}).get('jp') or \
                           term_data.get('term_source') or \
+                          term_data.get('term_jp') or \
                           term_id
-            term_target = term_data.get('name', {}).get('ru') or \
-                          term_data.get('term_ru') or \
-                          term_data.get('term_target', '')
+            term_target = term_data.get('name', {}).get('target') or \
+                          term_data.get('name', {}).get('ru') or \
+                          term_data.get('term_target') or \
+                          term_data.get('term_ru', '')
             comment = term_data.get('description') or term_data.get('comment', '')
             if term_source and term_target:
                 db.add_term(glossary_db, term_source, term_target,
@@ -205,15 +189,17 @@ def approve_via_tsv(terms: Dict[str, Any], tsv_path: Path, glossary_db: Path,
     term_list = []
     for category, items in terms.items():
         for term_id, term_data in items.items():
-            term_source = term_data.get('name', {}).get('jp') or \
-                          term_data.get('term_jp') or \
+            term_source = term_data.get('name', {}).get('source') or \
+                          term_data.get('name', {}).get('jp') or \
                           term_data.get('term_source') or \
+                          term_data.get('term_jp') or \
                           term_id
-            term_target = term_data.get('name', {}).get('ru') or \
-                          term_data.get('term_ru') or \
-                          term_data.get('term_target', '')
+            term_target = term_data.get('name', {}).get('target') or \
+                          term_data.get('name', {}).get('ru') or \
+                          term_data.get('term_target') or \
+                          term_data.get('term_ru', '')
             comment = term_data.get('description') or term_data.get('comment', '')
-            
+
             term_list.append({
                 'term_source': term_source,
                 'term_target': term_target,

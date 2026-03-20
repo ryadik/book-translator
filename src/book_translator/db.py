@@ -6,6 +6,10 @@ Two separate SQLite databases:
 - chunks.db: Per-volume translation state (one per volume, at volume/.state/)
 
 Both databases use PRAGMA user_version for schema versioning.
+
+Schema Versions:
+- chunks v1: initial (chunks table only)
+- chunks v2: added chapter_state table for pipeline stage tracking
 """
 import sqlite3
 from pathlib import Path
@@ -13,7 +17,7 @@ from typing import List, Dict, Optional, Any
 from contextlib import contextmanager
 
 GLOSSARY_SCHEMA_VERSION = 1
-CHUNKS_SCHEMA_VERSION = 1
+CHUNKS_SCHEMA_VERSION = 2
 
 
 @contextmanager
@@ -62,18 +66,21 @@ def init_glossary_db(db_path: Path) -> None:
 
 
 def init_chunks_db(db_path: Path) -> None:
-    """Initialize chunks database with schema version 1.
-    
+    """Initialize chunks database.
+
     Idempotent: safe to call multiple times. Does not drop existing data.
-    
-    Schema:
+    Applies schema migrations if current version is behind CHUNKS_SCHEMA_VERSION.
+
+    Schema v1:
         chunks(id, chapter_name, chunk_index, content_source, content_target, status, updated_at)
-        UNIQUE(chapter_name, chunk_index)
+    Schema v2:
+        + chapter_state(chapter_name TEXT PRIMARY KEY, pipeline_stage TEXT, updated_at TEXT)
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with connection(db_path) as conn:
-        version = conn.execute('PRAGMA user_version').fetchone()[0]
-        if version == 0:
+        current_version = conn.execute('PRAGMA user_version').fetchone()[0]
+
+        if current_version < 1:
             conn.executescript(f'''
                 CREATE TABLE IF NOT EXISTS chunks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,8 +92,19 @@ def init_chunks_db(db_path: Path) -> None:
                     updated_at TEXT DEFAULT (datetime('now')),
                     UNIQUE(chapter_name, chunk_index)
                 );
-                PRAGMA user_version = {CHUNKS_SCHEMA_VERSION};
             ''')
+
+        if current_version < 2:
+            conn.executescript(f'''
+                CREATE TABLE IF NOT EXISTS chapter_state (
+                    chapter_name TEXT PRIMARY KEY,
+                    pipeline_stage TEXT,
+                    updated_at TEXT DEFAULT (datetime('now'))
+                );
+            ''')
+
+        conn.execute(f'PRAGMA user_version = {CHUNKS_SCHEMA_VERSION}')
+        conn.commit()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -247,3 +265,72 @@ def get_chunks_by_status(
             (chapter_name, status),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chapter pipeline state operations
+# ─────────────────────────────────────────────────────────────────────────────
+
+def set_chapter_stage(db_path: Path, chapter_name: str, stage: str) -> None:
+    """Set the current pipeline stage for a chapter.
+
+    Valid stages: 'discovery', 'translation', 'proofreading',
+                  'global_proofreading', 'complete'
+    """
+    with connection(db_path) as conn:
+        conn.execute(
+            '''
+            INSERT INTO chapter_state (chapter_name, pipeline_stage, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(chapter_name) DO UPDATE
+            SET pipeline_stage = excluded.pipeline_stage,
+                updated_at = excluded.updated_at
+            ''',
+            (chapter_name, stage),
+        )
+        conn.commit()
+
+
+def get_chapter_stage(db_path: Path, chapter_name: str) -> str | None:
+    """Get the current pipeline stage for a chapter.
+
+    Returns None if the chapter has not been started yet.
+    """
+    with connection(db_path) as conn:
+        row = conn.execute(
+            'SELECT pipeline_stage FROM chapter_state WHERE chapter_name = ?',
+            (chapter_name,),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def reset_chapter_stage(
+    db_path: Path,
+    chapter_name: str,
+    to_stage: str,
+    chunk_status: str,
+) -> None:
+    """Reset pipeline to a given stage by updating chapter_state and chunk statuses.
+
+    Args:
+        db_path: Path to chunks.db
+        chapter_name: Chapter to reset
+        to_stage: The stage to rewind to (e.g. 'discovery')
+        chunk_status: Status to assign to all chunks (e.g. 'discovery_pending')
+    """
+    with connection(db_path) as conn:
+        conn.execute(
+            "UPDATE chunks SET status = ?, updated_at = datetime('now') WHERE chapter_name = ?",
+            (chunk_status, chapter_name),
+        )
+        conn.execute(
+            '''
+            INSERT INTO chapter_state (chapter_name, pipeline_stage, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(chapter_name) DO UPDATE
+            SET pipeline_stage = excluded.pipeline_stage,
+                updated_at = excluded.updated_at
+            ''',
+            (chapter_name, to_stage),
+        )
+        conn.commit()
