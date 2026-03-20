@@ -1,13 +1,34 @@
-# Prompts (Legacy Reference)
+# Prompts (Series Overrides)
 
-These prompt files are kept as reference documentation only.
+Files in this directory serve as **series-level prompt overrides**.
 
-Since Phase 3, all prompts are **bundled into `default_prompts.py`** and no longer
-read from this directory at runtime.
+All prompts are bundled in `src/book_translator/default_prompts.py`. At runtime, `path_resolver.resolve_prompt()` checks the series `prompts/` directory first — if a file is found here, it takes priority over the bundled default.
 
-To override a prompt for a specific series, place it in:
+To override a prompt for a specific series, place the file in:
 ```
 {series_root}/prompts/{prompt_name}.txt
 ```
 
-Available prompt names: `translation`, `term_discovery`, `proofreading`, `global_proofreading`
+## Available prompt names
+
+| File | Stage |
+|---|---|
+| `translation.txt` | Translation (per-chunk) |
+| `proofreading.txt` | Proofreading (per-chunk) |
+| `global_proofreading.txt` | Global proofreading (full document) |
+| `term_discovery.txt` | Term discovery |
+
+## Available placeholders
+
+| Placeholder | Description |
+|---|---|
+| `{text}` | Source text chunk |
+| `{glossary}` | Glossary terms formatted for the prompt |
+| `{style_guide}` | Contents of `style_guide.md` |
+| `{world_info}` | Contents of `world_info.md` |
+| `{previous_context}` | Source text of the previous chunk (translation continuity) |
+| `{typography_rules}` | Language-specific typography rules from `languages.py` |
+| `{target_lang_name}` | Full name of the target language (e.g. `Russian`) |
+| `{source_lang_name}` | Full name of the source language (e.g. `Japanese`) |
+
+Files in this repository (`prompts/*.txt`) are synced with the bundled defaults and can be used as a reference or starting point for customization.
