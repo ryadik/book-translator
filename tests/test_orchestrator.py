@@ -226,9 +226,10 @@ def test_run_translation_process_chunks_added_to_db(
     assert len(chunks) == 2
 
 
+@patch('book_translator.orchestrator._is_pid_alive', return_value=True)
 @patch('book_translator.orchestrator.setup_loggers')
-def test_run_translation_process_exits_on_lock(mock_loggers, tmp_path):
-    """Should raise TranslationLockedError if lock file exists and resume=False."""
+def test_run_translation_process_exits_on_lock(mock_loggers, mock_pid_alive, tmp_path):
+    """Should raise TranslationLockedError if lock file exists and PID is alive."""
     series_root, chapter_path = _make_mock_series(tmp_path)
 
     # Manually create the lock file

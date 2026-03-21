@@ -1,5 +1,5 @@
 import pytest
-from book_translator.default_prompts import PROMPTS, get_prompt, TRANSLATION_PROMPT, TERM_DISCOVERY_PROMPT
+from book_translator.default_prompts import PROMPTS, TRANSLATION_PROMPT, TERM_DISCOVERY_PROMPT
 
 
 class TestDefaultPrompts:
@@ -21,27 +21,6 @@ class TestDefaultPrompts:
     def test_term_discovery_has_required_placeholders(self):
         assert '{text}' in TERM_DISCOVERY_PROMPT
         assert '{glossary}' in TERM_DISCOVERY_PROMPT
-
-    def test_get_prompt_returns_content(self):
-        result = get_prompt('translation')
-        assert result == PROMPTS['translation']
-        assert len(result) > 100
-
-    def test_get_prompt_all_names_work(self):
-        for name in ['translation', 'term_discovery', 'proofreading', 'global_proofreading']:
-            result = get_prompt(name)
-            assert isinstance(result, str)
-            assert len(result) > 0
-
-    def test_get_prompt_unknown_raises_key_error(self):
-        with pytest.raises(KeyError, match="Unknown prompt"):
-            get_prompt('nonexistent')
-
-    def test_get_prompt_error_lists_available(self):
-        try:
-            get_prompt('bad_name')
-        except KeyError as e:
-            assert 'translation' in str(e)
 
     def test_prompts_dict_has_four_entries(self):
         assert len(PROMPTS) == 4

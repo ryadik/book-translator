@@ -13,6 +13,8 @@ from book_translator.db import (
     get_chunks,
     get_all_chapters,
     update_chunk_status,
+    update_chunk_content,
+    clear_chapter,
     get_chunks_by_status,
     GLOSSARY_SCHEMA_VERSION,
     CHUNKS_SCHEMA_VERSION,
@@ -201,6 +203,22 @@ class TestChunkOperations:
         chunks = get_chunks(chunks_db, 'ch')
         assert chunks[0]['status'] == 'translation_done'
 
+    def test_update_chunk_status_preserves_content(self, chunks_db):
+        add_chunk(chunks_db, 'ch', 1, content_source='src', content_target='tgt', status='discovery_pending')
+        update_chunk_status(chunks_db, 'ch', 1, 'translation_done')
+        chunks = get_chunks(chunks_db, 'ch')
+        assert chunks[0]['content_source'] == 'src'
+        assert chunks[0]['content_target'] == 'tgt'
+        assert chunks[0]['status'] == 'translation_done'
+
+    def test_update_chunk_content(self, chunks_db):
+        add_chunk(chunks_db, 'ch', 1, content_source='src', content_target=None, status='translation_pending')
+        update_chunk_content(chunks_db, 'ch', 1, 'translated text', 'translation_done')
+        chunks = get_chunks(chunks_db, 'ch')
+        assert chunks[0]['content_source'] == 'src'
+        assert chunks[0]['content_target'] == 'translated text'
+        assert chunks[0]['status'] == 'translation_done'
+
     def test_get_chunks_by_status(self, chunks_db):
         add_chunk(chunks_db, 'ch', 0, status='discovery_pending')
         add_chunk(chunks_db, 'ch', 1, status='translation_done')
@@ -213,6 +231,13 @@ class TestChunkOperations:
     def test_get_empty_chapter_returns_empty_list(self, chunks_db):
         chunks = get_chunks(chunks_db, 'nonexistent')
         assert chunks == []
+
+    def test_clear_chapter_removes_only_target_chapter(self, chunks_db):
+        add_chunk(chunks_db, 'ch-1', 1, content_source='a', status='discovery_pending')
+        add_chunk(chunks_db, 'ch-2', 1, content_source='b', status='discovery_pending')
+        clear_chapter(chunks_db, 'ch-1')
+        assert get_chunks(chunks_db, 'ch-1') == []
+        assert len(get_chunks(chunks_db, 'ch-2')) == 1
 
 
 from book_translator.db import set_chapter_stage, get_chapter_stage, reset_chapter_stage
