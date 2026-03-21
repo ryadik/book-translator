@@ -44,6 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
     all_parser.add_argument('--resume', action='store_true', help='Возобновить прерванный перевод')
     all_parser.add_argument('--force', action='store_true', help='Очистить состояние и начать заново')
     all_parser.add_argument('--dry-run', action='store_true', help='Показать план без вызовов API')
+    all_parser.add_argument(
+        '--stage',
+        choices=['discovery', 'translation', 'proofreading', 'global_proofreading'],
+        default=None,
+        help='Принудительно перезапустить с указанного этапа'
+    )
     docx_group2 = all_parser.add_mutually_exclusive_group()
     docx_group2.add_argument('--docx', action='store_true', dest='docx', help='Конвертировать в .docx')
     docx_group2.add_argument('--no-docx', action='store_true', dest='no_docx', help='Не конвертировать в .docx')

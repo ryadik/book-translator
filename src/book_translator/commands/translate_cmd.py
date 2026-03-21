@@ -63,7 +63,7 @@ def _translate_file(series_root: Path, chapter_path: Path, args):
         )
     except TranslationLockedError as e:
         print(f"\n🔒 {e}")
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
 
 def run_translate_all(args):
@@ -105,4 +105,11 @@ def _translate_directory(series_root: Path, source_dir: Path, args):
 
     for i, chapter_path in enumerate(txt_files, 1):
         print(f"\n[{i}/{len(txt_files)}] Перевод: {chapter_path.name}")
-        _translate_file(series_root, chapter_path, args)
+        try:
+            _translate_file(series_root, chapter_path, args)
+        except SystemExit as e:
+            if e.code == 1:
+                # TranslationLockedError from _translate_file — skip and continue
+                print(f"   Пропуск '{chapter_path.name}' (заблокировано). Продолжаем...")
+            else:
+                raise

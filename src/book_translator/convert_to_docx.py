@@ -1,9 +1,6 @@
 import os
 import re
 from pathlib import Path
-from docx import Document
-from docx.shared import Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 
 def convert_txt_to_docx(input_file: str | Path, output_file: str | Path) -> None:
@@ -19,6 +16,15 @@ def convert_txt_to_docx(input_file: str | Path, output_file: str | Path) -> None
         content = input_file.read_text(encoding='utf-8')
     except OSError as e:
         raise OSError(f"Error reading file '{input_file}': {e}") from e
+
+    try:
+        from docx import Document
+        from docx.shared import Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+    except ImportError as exc:
+        raise ImportError(
+            "python-docx is required for DOCX conversion. Install: pip install python-docx"
+        ) from exc
 
     # Normalize newlines: any sequence of 2+ newlines becomes exactly two
     normalized_content = re.sub(r'\n{2,}', '\n\n', content.strip())

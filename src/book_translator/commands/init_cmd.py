@@ -1,10 +1,6 @@
 import shutil
+from importlib import resources
 from pathlib import Path
-
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib
 
 from book_translator.discovery import MARKER_FILE
 from book_translator.db import init_glossary_db
@@ -49,13 +45,15 @@ STYLE_GUIDE_TEMPLATE = '''## Стайлгайд перевода
 
 def _find_bundled_style_guide(source_lang: str, target_lang: str) -> Path | None:
     """Find bundled style guide for the given language pair."""
-    style_guides_dir = Path(__file__).resolve().parent.parent.parent.parent / 'data' / 'style_guides'
-    exact = style_guides_dir / f'{source_lang}_{target_lang}.md'
-    if exact.is_file():
-        return exact
-    default = style_guides_dir / 'default.md'
-    if default.is_file():
-        return default
+    style_guides_ref = resources.files('book_translator') / 'data' / 'style_guides'
+    for name in (f'{source_lang}_{target_lang}.md', 'default.md'):
+        candidate = style_guides_ref / name
+        try:
+            path = Path(str(candidate))
+            if path.is_file():
+                return path
+        except Exception:
+            pass
     return None
 
 def run_init(args):

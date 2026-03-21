@@ -75,10 +75,7 @@ def run_status(args):
             stage = get_chapter_stage(chunks_db, chapter)
             emoji = _STATUS_EMOJI.get(stage, '⏳')
 
-            done = sum(
-                1 for c in chunks
-                if c['status'].endswith('_done') or c['status'] == 'reading_done'
-            )
+            done = sum(1 for c in chunks if c['status'].endswith('_done'))
             errors = sum(1 for c in chunks if c['status'].endswith('_failed'))
             stage_label = stage or 'не начат'
 
