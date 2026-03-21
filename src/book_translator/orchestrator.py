@@ -25,6 +25,23 @@ from book_translator.exceptions import TranslationLockedError
 from book_translator import llm_runner
 
 
+def _reset_in_progress_to_failed(chunks_db: Path, chapter_name: str) -> None:
+    """Reset any *_in_progress chunks to *_failed so next --resume can retry them."""
+    for chunk in db.get_chunks(chunks_db, chapter_name):
+        if chunk['status'].endswith('_in_progress'):
+            new_status = chunk['status'].replace('_in_progress', '_failed')
+            db.update_chunk_status(chunks_db, chapter_name, chunk['chunk_index'], new_status)
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Return True if process with given PID is still running."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
 @dataclass
 class WorkerConfig:
     """Shared configuration for worker pool execution."""
@@ -58,7 +75,7 @@ def _run_single_worker(
     chunk_index = chunk['chunk_index']
 
     try:
-        db.add_chunk(config.chunks_db, config.chapter_name, chunk_index, content_source=chunk['content_source'], content_target=chunk['content_target'], status=f"{step_name}_in_progress")
+        db.update_chunk_status(config.chunks_db, config.chapter_name, chunk_index, f"{step_name}_in_progress")
 
         chunk_content = chunk['content_target'] if step_name == "reading" else chunk['content_source']
         final_prompt = (prompt_template
@@ -85,7 +102,8 @@ def _run_single_worker(
         )
 
         if output_suffix == ".json":
-            output_path = config.volume_paths.cache_dir / f"chunk_{chunk_index}{output_suffix}"
+            safe_chapter = config.chapter_name.replace('/', '_').replace('\\', '_')
+            output_path = config.volume_paths.cache_dir / f"{safe_chapter}_chunk_{chunk_index}{output_suffix}"
             try:
                 output_path.write_text(stdout_output, encoding='utf-8')
             except Exception as e:
@@ -94,17 +112,16 @@ def _run_single_worker(
         system_logger.info(f"[Orchestrator] Воркер [id: {worker_id}] для chunk_{chunk_index} успешно завершен.")
 
         if step_name == "discovery":
-            db.add_chunk(config.chunks_db, config.chapter_name, chunk_index, content_source=chunk['content_source'], content_target=chunk['content_target'], status="discovery_done")
-        elif step_name == "translation":
-            db.add_chunk(config.chunks_db, config.chapter_name, chunk_index, content_source=chunk['content_source'], content_target=stdout_output, status="translation_done")
-        elif step_name == "reading":
-            db.add_chunk(config.chunks_db, config.chapter_name, chunk_index, content_source=chunk['content_source'], content_target=stdout_output, status="reading_done")
+            db.update_chunk_status(config.chunks_db, config.chapter_name, chunk_index, "discovery_done")
+        elif step_name in ("translation", "reading"):
+            status = "translation_done" if step_name == "translation" else "reading_done"
+            db.update_chunk_content(config.chunks_db, config.chapter_name, chunk_index, stdout_output, status)
 
         return True
 
     except Exception as e:
         system_logger.critical(f"[Orchestrator] КРИТИЧЕСКАЯ ОШИБКА при запуске воркера [id: {worker_id}] для chunk_{chunk_index}: {e}", exc_info=True)
-        db.add_chunk(config.chunks_db, config.chapter_name, chunk_index, content_source=chunk['content_source'], content_target=chunk['content_target'], status=f"{step_name}_failed")
+        db.update_chunk_status(config.chunks_db, config.chapter_name, chunk_index, f"{step_name}_failed")
         return False
 
 
@@ -271,18 +288,25 @@ def run_translation_process(
     lock_file = volume_paths.state_dir / '.lock'
 
     if lock_file.exists() and not resume:
-        raise TranslationLockedError(
-            f"Обнаружена блокировка для главы '{chapter_name}'. "
-            "Используйте `--resume` для продолжения или `--force` для сброса."
-        )
+        try:
+            pid = int(lock_file.read_text().strip())
+            if _is_pid_alive(pid):
+                raise TranslationLockedError(
+                    f"Обнаружена блокировка для главы '{chapter_name}' (PID {pid}). "
+                    "Используйте `--resume` для продолжения или `--force` для сброса."
+                )
+            else:
+                system_logger.warning(f"[Orchestrator] Устаревший lock-файл (PID {pid} мёртв). Удаляю lock.")
+                lock_file.unlink()
+        except (ValueError, OSError):
+            lock_file.unlink()
 
     if force and volume_paths.state_dir.exists():
-        system_logger.info("[Orchestrator] Обнаружен флаг `--force`. Полная очистка состояния...")
+        system_logger.info(f"[Orchestrator] Обнаружен флаг `--force`. Очистка состояния главы '{chapter_name}'...")
         if lock_file.exists():
             lock_file.unlink()
-        if chunks_db.exists():
-            chunks_db.unlink()
         db.init_chunks_db(chunks_db)
+        db.clear_chapter(chunks_db, chapter_name)
 
     # Load prompts
     term_prompt_template = path_resolver.resolve_prompt(series_root, 'term_discovery', default_prompts.PROMPTS)
@@ -347,16 +371,14 @@ def run_translation_process(
             for chunk in chunks:
                 if chunk['status'].endswith('_in_progress') or chunk['status'].endswith('_failed'):
                     new_status = chunk['status'].replace('_in_progress', '_pending').replace('_failed', '_pending')
-                    db.add_chunk(chunks_db, chapter_name, chunk['chunk_index'], content_source=chunk['content_source'], content_target=chunk['content_target'], status=new_status)
+                    db.update_chunk_status(chunks_db, chapter_name, chunk['chunk_index'], new_status)
 
         # --- Этап 0: Разделение на чанки ---
         chunks = db.get_chunks(chunks_db, chapter_name)
         if not chunks and not resume:
             system_logger.info("[Orchestrator] Разделение главы на чанки...")
-            temp_split_dir = volume_paths.cache_dir / "temp_split"
             chunks_data = chapter_splitter.split_chapter_intelligently(
                 str(chapter_path),
-                str(temp_split_dir),
                 cfg['splitter']['target_chunk_size'],
                 cfg['splitter']['max_part_chars']
             )
@@ -379,16 +401,18 @@ def run_translation_process(
                     discovery_config,
                 )
                 if not success:
+                    _reset_in_progress_to_failed(chunks_db, chapter_name)
                     system_logger.error("[Orchestrator] Этап поиска терминов завершился с ошибками.")
                     return
 
             system_logger.info("\n--- Сбор и подтверждение терминов ---")
             raw_responses = []
-            for json_file in volume_paths.cache_dir.glob("*.json"):
+            safe_chapter = chapter_name.replace('/', '_').replace('\\', '_')
+            for json_file in volume_paths.cache_dir.glob(f"{safe_chapter}_chunk_*.json"):
                 raw_responses.append(json_file.read_text(encoding='utf-8'))
 
             new_terms = term_collector.collect_terms_from_responses(raw_responses)
-            if any(new_terms.values()):
+            if new_terms:
                 tsv_path = volume_paths.state_dir / 'pending_terms.tsv'
                 term_collector.approve_via_tsv(new_terms, tsv_path, glossary_db, source_lang, target_lang)
             else:
@@ -399,7 +423,7 @@ def run_translation_process(
 
             for chunk in db.get_chunks(chunks_db, chapter_name):
                 if chunk['status'] == 'discovery_done':
-                    db.add_chunk(chunks_db, chapter_name, chunk['chunk_index'], content_source=chunk['content_source'], content_target=chunk['content_target'], status="translation_pending")
+                    db.update_chunk_status(chunks_db, chapter_name, chunk['chunk_index'], "translation_pending")
         else:
             system_logger.info("\n[Orchestrator] Обнаружен чекпоинт. Пропуск этапа поиска терминов.")
 
@@ -425,6 +449,7 @@ def run_translation_process(
                     translation_config, contexts=contexts,
                 )
                 if not success:
+                    _reset_in_progress_to_failed(chunks_db, chapter_name)
                     system_logger.error("[Orchestrator] Этап перевода завершился с ошибками.")
                     return
 
@@ -433,7 +458,7 @@ def run_translation_process(
 
             for chunk in db.get_chunks(chunks_db, chapter_name):
                 if chunk['status'] == 'translation_done':
-                    db.add_chunk(chunks_db, chapter_name, chunk['chunk_index'], content_source=chunk['content_source'], content_target=chunk['content_target'], status="reading_pending")
+                    db.update_chunk_status(chunks_db, chapter_name, chunk['chunk_index'], "reading_pending")
         else:
             system_logger.info("\n[Orchestrator] Обнаружен чекпоинт. Пропуск этапа перевода.")
 
@@ -459,6 +484,7 @@ def run_translation_process(
                     proofreading_config, contexts=contexts,
                 )
                 if not success:
+                    _reset_in_progress_to_failed(chunks_db, chapter_name)
                     system_logger.error("[Orchestrator] Этап вычитки завершился с ошибками.")
                     return
 
@@ -492,7 +518,7 @@ def run_translation_process(
                 )
 
             for chunk in updated_chunks:
-                db.add_chunk(chunks_db, chapter_name, chunk['chunk_index'], content_source=chunk['content_source'], content_target=chunk['content_target'], status="reading_done")
+                db.update_chunk_content(chunks_db, chapter_name, chunk['chunk_index'], chunk['content_target'], "reading_done")
 
             db.set_chapter_stage(chunks_db, chapter_name, 'complete')
             system_logger.info("[Orchestrator] Этап global_proofreading завершён.")

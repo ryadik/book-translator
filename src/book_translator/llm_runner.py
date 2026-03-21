@@ -5,6 +5,7 @@ Provides run_gemini() which handles subprocess execution, retry logic,
 rate limiting, and input/output logging.
 """
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,10 @@ from book_translator.logger import system_logger, input_logger, output_logger
 from book_translator.rate_limiter import RateLimiter
 from book_translator.utils import find_tool_versions_dir
 
-_SUBPROCESS_CWD = find_tool_versions_dir()
+
+@lru_cache(maxsize=1)
+def _get_subprocess_cwd() -> Path | None:
+    return find_tool_versions_dir()
 
 
 def run_gemini(
@@ -50,7 +54,10 @@ def run_gemini(
         subprocess.CalledProcessError: After exhausting retries.
         subprocess.TimeoutExpired: After exhausting retries.
     """
-    command = ['gemini', '-m', model_name, '-p', prompt, '--output-format', output_format]
+    # Pass prompt via stdin to avoid ARG_MAX limits and prevent prompt leakage in `ps aux`.
+    # Use `-p " "` (single space) to trigger non-interactive (headless) mode;
+    # gemini-cli concatenates stdin + -p value, so the space is harmless.
+    command = ['gemini', '-m', model_name, '-p', ' ', '--output-format', output_format]
     input_logger.info(f"[{worker_id}] --- PROMPT FOR: {label} ---\n{prompt}\n")
 
     @retry(
@@ -65,13 +72,14 @@ def run_gemini(
             with rate_limiter:
                 result = subprocess.run(
                     command,
+                    input=prompt,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
                     encoding='utf-8',
                     timeout=timeout,
                     check=True,
-                    cwd=_SUBPROCESS_CWD,
+                    cwd=_get_subprocess_cwd(),
                 )
             return result.stdout
         except subprocess.CalledProcessError as e:

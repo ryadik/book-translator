@@ -26,7 +26,7 @@ def connection(db_path: Path):
     
     WAL mode must be enabled on a real file path (not :memory:).
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
     if str(db_path) != ':memory:':
@@ -239,12 +239,36 @@ def update_chunk_status(
     chunk_index: int,
     status: str,
 ) -> None:
-    """Update the status of a specific chunk."""
+    """Update the status of a specific chunk without touching content."""
     with connection(db_path) as conn:
         conn.execute(
             'UPDATE chunks SET status = ? WHERE chapter_name = ? AND chunk_index = ?',
             (status, chapter_name, chunk_index),
         )
+        conn.commit()
+
+
+def update_chunk_content(
+    db_path: Path,
+    chapter_name: str,
+    chunk_index: int,
+    content_target: str,
+    status: str,
+) -> None:
+    """Update translated content and status of a specific chunk."""
+    with connection(db_path) as conn:
+        conn.execute(
+            'UPDATE chunks SET content_target = ?, status = ? WHERE chapter_name = ? AND chunk_index = ?',
+            (content_target, status, chapter_name, chunk_index),
+        )
+        conn.commit()
+
+
+def clear_chapter(db_path: Path, chapter_name: str) -> None:
+    """Delete all chunks and chapter_state records for a specific chapter."""
+    with connection(db_path) as conn:
+        conn.execute('DELETE FROM chunks WHERE chapter_name = ?', (chapter_name,))
+        conn.execute('DELETE FROM chapter_state WHERE chapter_name = ?', (chapter_name,))
         conn.commit()
 
 
@@ -271,12 +295,17 @@ def get_chunks_by_status(
 # Chapter pipeline state operations
 # ─────────────────────────────────────────────────────────────────────────────
 
+VALID_STAGES = frozenset({'discovery', 'translation', 'proofreading', 'global_proofreading', 'complete'})
+
+
 def set_chapter_stage(db_path: Path, chapter_name: str, stage: str) -> None:
     """Set the current pipeline stage for a chapter.
 
     Valid stages: 'discovery', 'translation', 'proofreading',
                   'global_proofreading', 'complete'
     """
+    if stage not in VALID_STAGES:
+        raise ValueError(f"Invalid stage: {stage!r}. Must be one of {sorted(VALID_STAGES)}")
     with connection(db_path) as conn:
         conn.execute(
             '''

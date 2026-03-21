@@ -25,19 +25,26 @@ def apply_diffs(chunks: list[dict[str, str | int]], diffs: list[dict[str, str | 
             system_logger.warning(f"Invalid diff format: {diff}")
             continue
             
-        if not isinstance(chunk_idx, int) or chunk_idx < 0 or chunk_idx >= len(updated_chunks):
-            system_logger.warning(f"Chunk index out of bounds or invalid: {chunk_idx}")
+        if not isinstance(chunk_idx, int):
+            system_logger.warning(f"Chunk index invalid type: {chunk_idx!r}")
             continue
-            
-        chunk = updated_chunks[chunk_idx]
+
+        # Look up by chunk_index field value, not array position (DB uses 1-based indexing)
+        matching = [i for i, c in enumerate(updated_chunks) if c.get("chunk_index") == chunk_idx]
+        if not matching:
+            system_logger.warning(f"Chunk with chunk_index={chunk_idx} not found in chunk list")
+            continue
+        pos = matching[0]
+
+        chunk = updated_chunks[pos]
         content = str(chunk.get("content_target", ""))
         find_str = str(find_str)
         replace_str = str(replace_str)
-        
+
         occurrences = content.count(find_str)
-        
+
         if occurrences == 1:
-            chunk["content_target"] = content.replace(find_str, replace_str)
+            updated_chunks[pos] = dict(chunk, content_target=content.replace(find_str, replace_str))
             system_logger.info(f"Applied diff to chunk {chunk_idx}: replaced '{find_str}' with '{replace_str}'")
         elif occurrences == 0:
             system_logger.warning(f"Diff skipped: 'find' string not found in chunk {chunk_idx}. String: {find_str!r}")
