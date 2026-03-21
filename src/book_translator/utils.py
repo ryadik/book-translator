@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import json_repair
@@ -74,3 +75,11 @@ def parse_llm_json(raw: str) -> Any:
                     pass  # Возвращаем внешний parsed ниже
 
     return parsed
+
+
+def find_tool_versions_dir() -> Path | None:
+    """Walk up from this file to find a directory containing .tool-versions (for asdf)."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / '.tool-versions').exists():
+            return parent
+    return None

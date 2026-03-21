@@ -3,7 +3,6 @@ Series discovery module.
 Implements walk-up algorithm to find book-translator.toml from CWD.
 """
 from pathlib import Path
-from typing import Optional
 
 MARKER_FILE = "book-translator.toml"
 
@@ -17,7 +16,7 @@ except ImportError:
         tomllib = None
 
 
-def find_series_root(start_dir: Optional[Path] = None) -> Path:
+def find_series_root(start_dir: Path | None = None) -> Path:
     """Walk up from start_dir (default: CWD) looking for book-translator.toml.
     
     Returns the directory containing the marker file.

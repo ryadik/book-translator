@@ -7,7 +7,7 @@ for LLM-discovered terms.
 """
 import sys
 from pathlib import Path
-from typing import List, Dict, TextIO
+from typing import TextIO
 
 from book_translator.db import add_term, get_terms, init_glossary_db
 
@@ -52,7 +52,7 @@ def import_tsv(db_path: Path, tsv_path: Path,
     return count
 
 
-def generate_approval_tsv(terms: List[Dict], output_path: Path):
+def generate_approval_tsv(terms: list[dict], output_path: Path):
     """Generate a TSV file with LLM-discovered terms for user approval.
     This is the TSV 'approval buffer' — user edits this, then
     the approved version is imported into the DB.

@@ -13,7 +13,7 @@ Schema Versions:
 """
 import sqlite3
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import Any
 from contextlib import contextmanager
 
 GLOSSARY_SCHEMA_VERSION = 1
@@ -140,7 +140,7 @@ def get_terms(
     db_path: Path,
     source_lang: str = 'ja',
     target_lang: str = 'ru',
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return all glossary terms for a language pair, ordered by term_source."""
     with connection(db_path) as conn:
         rows = conn.execute(
@@ -189,8 +189,8 @@ def add_chunk(
     db_path: Path,
     chapter_name: str,
     chunk_index: int,
-    content_source: Optional[str] = None,
-    content_target: Optional[str] = None,
+    content_source: str | None = None,
+    content_target: str | None = None,
     status: str = 'discovery_pending',
 ) -> None:
     """Insert or replace a chunk (upsert semantics)."""
@@ -209,7 +209,7 @@ def add_chunk(
 def get_chunks(
     db_path: Path,
     chapter_name: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return all chunks for a chapter, ordered by chunk_index."""
     with connection(db_path) as conn:
         rows = conn.execute(
@@ -224,7 +224,7 @@ def get_chunks(
     return [dict(r) for r in rows]
 
 
-def get_all_chapters(db_path: Path) -> List[str]:
+def get_all_chapters(db_path: Path) -> list[str]:
     """Return a sorted list of all unique chapter names in the chunks DB."""
     with connection(db_path) as conn:
         rows = conn.execute(
@@ -252,7 +252,7 @@ def get_chunks_by_status(
     db_path: Path,
     chapter_name: str,
     status: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return chunks for a chapter that have the given status."""
     with connection(db_path) as conn:
         rows = conn.execute(
