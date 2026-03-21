@@ -36,6 +36,16 @@ def _translate_file(series_root: Path, chapter_path: Path, args):
     else:
         auto_docx = None  # Will prompt interactively
 
+    # Determine auto_epub flag
+    epub = getattr(args, 'epub', False)
+    no_epub = getattr(args, 'no_epub', False)
+    if epub:
+        auto_epub = True
+    elif no_epub:
+        auto_epub = False
+    else:
+        auto_epub = None  # Will prompt interactively
+
     restart_stage = getattr(args, 'stage', None)
     dry_run = getattr(args, 'dry_run', False)
 
@@ -47,6 +57,7 @@ def _translate_file(series_root: Path, chapter_path: Path, args):
             resume=args.resume,
             force=args.force,
             auto_docx=auto_docx,
+            auto_epub=auto_epub,
             restart_stage=restart_stage,
             dry_run=dry_run,
         )

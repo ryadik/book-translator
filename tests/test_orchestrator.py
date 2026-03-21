@@ -154,14 +154,13 @@ def _make_mock_series(tmp_path):
 
 
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
-@patch('book_translator.orchestrator.term_collector.present_for_confirmation', return_value={})
 @patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently')
 @patch('book_translator.orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_lock_file_created(
     mock_input, mock_loggers, mock_splitter, mock_save_terms,
-    mock_confirm, mock_collect, tmp_path
+    mock_collect, tmp_path
 ):
     """Lock file should be created and then removed after run."""
     series_root, chapter_path = _make_mock_series(tmp_path)
@@ -180,14 +179,13 @@ def test_run_translation_process_lock_file_created(
 
 
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
-@patch('book_translator.orchestrator.term_collector.present_for_confirmation', return_value={})
 @patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently')
 @patch('book_translator.orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_chunks_db_created(
     mock_input, mock_loggers, mock_splitter, mock_save_terms,
-    mock_confirm, mock_collect, tmp_path
+    mock_collect, tmp_path
 ):
     """chunks.db should be created after run_translation_process."""
     series_root, chapter_path = _make_mock_series(tmp_path)
@@ -203,12 +201,11 @@ def test_run_translation_process_chunks_db_created(
 
 
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
-@patch('book_translator.orchestrator.term_collector.present_for_confirmation', return_value={})
 @patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_chunks_added_to_db(
-    mock_input, mock_loggers, mock_save_terms, mock_confirm, mock_collect, tmp_path
+    mock_input, mock_loggers, mock_save_terms, mock_collect, tmp_path
 ):
     """Chunks from splitter should be persisted to chunks.db."""
     series_root, chapter_path = _make_mock_series(tmp_path)
@@ -249,13 +246,12 @@ def test_run_translation_process_exits_on_lock(mock_loggers, tmp_path):
 
 
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
-@patch('book_translator.orchestrator.term_collector.present_for_confirmation', return_value=None)
 @patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=[{'id': 0, 'text': 'text'}])
 @patch('book_translator.orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_user_cancel(
-    mock_input, mock_loggers, mock_splitter, mock_save_terms, mock_confirm, mock_collect, tmp_path
+    mock_input, mock_loggers, mock_splitter, mock_save_terms, mock_collect, tmp_path
 ):
     """If user cancels during term confirmation, run should abort gracefully."""
     series_root, chapter_path = _make_mock_series(tmp_path)
@@ -269,12 +265,11 @@ def test_run_translation_process_user_cancel(
 
 
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
-@patch('book_translator.orchestrator.term_collector.present_for_confirmation', return_value={})
 @patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently')
 @patch('book_translator.orchestrator.setup_loggers')
 def test_run_translation_process_output_file_created(
-    mock_loggers, mock_splitter, mock_save_terms, mock_confirm, mock_collect, tmp_path
+    mock_loggers, mock_splitter, mock_save_terms, mock_collect, tmp_path
 ):
     """Output file should be created in volume output dir.
 
@@ -356,11 +351,10 @@ def test_dry_run_returns_none(mock_splitter, mock_loggers, tmp_path):
 
 
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
-@patch('book_translator.orchestrator.term_collector.present_for_confirmation', return_value={})
 @patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently')
 @patch('book_translator.orchestrator.setup_loggers')
-def test_restart_stage_resets_db_state(mock_loggers, mock_splitter, mock_save, mock_confirm, mock_collect, tmp_path):
+def test_restart_stage_resets_db_state(mock_loggers, mock_splitter, mock_save, mock_collect, tmp_path):
     """restart_stage='translation' must reset chapter_state and chunk statuses."""
     series_root, chapter_path = _make_mock_series(tmp_path)
     mock_splitter.return_value = []
@@ -417,25 +411,91 @@ def test_auto_docx_false_skips_conversion(mock_docx, mock_splitter, mock_loggers
 
 
 
+@patch('book_translator.orchestrator.setup_loggers')
+@patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=[])
+@patch('book_translator.orchestrator.convert_to_epub')
+def test_auto_epub_false_skips_conversion(mock_epub, mock_splitter, mock_loggers, tmp_path):
+    """auto_epub=False must not call convert_to_epub."""
+    series_root, chapter_path = _make_mock_series(tmp_path)
+
+    volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
+    orchestrator.path_resolver.ensure_volume_dirs(volume_paths)
+    from book_translator import db as db_module
+    db_module.init_chunks_db(volume_paths.chunks_db)
+    db_module.add_chunk(volume_paths.chunks_db, 'test-chapter', 0,
+                        content_source='テスト', content_target='Тест',
+                        status='reading_done')
+    db_module.set_chapter_stage(volume_paths.chunks_db, 'test-chapter', 'complete')
+
+    with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]), \
+         patch('builtins.input', return_value='n'):
+        orchestrator.run_translation_process(
+            series_root, chapter_path, auto_docx=False, auto_epub=False
+        )
+
+    mock_epub.convert_txt_to_epub.assert_not_called()
+
+
+@patch('book_translator.orchestrator.setup_loggers')
+@patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=[])
+@patch('book_translator.orchestrator.convert_to_epub')
+def test_auto_epub_true_calls_conversion(mock_epub, mock_splitter, mock_loggers, tmp_path):
+    """auto_epub=True must call convert_to_epub.convert_txt_to_epub."""
+    series_root, chapter_path = _make_mock_series(tmp_path)
+
+    volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
+    orchestrator.path_resolver.ensure_volume_dirs(volume_paths)
+    from book_translator import db as db_module
+    db_module.init_chunks_db(volume_paths.chunks_db)
+    db_module.add_chunk(volume_paths.chunks_db, 'test-chapter', 0,
+                        content_source='テスト', content_target='Тест',
+                        status='reading_done')
+    db_module.set_chapter_stage(volume_paths.chunks_db, 'test-chapter', 'complete')
+
+    with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]):
+        orchestrator.run_translation_process(
+            series_root, chapter_path, auto_docx=False, auto_epub=True
+        )
+
+    mock_epub.convert_txt_to_epub.assert_called_once()
+    call_kwargs = mock_epub.convert_txt_to_epub.call_args
+    assert call_kwargs.kwargs['title'] == 'test-chapter'
+
+
+def test_run_translation_process_signature_has_auto_epub():
+    """Signature must include auto_epub with default None."""
+    sig = inspect.signature(orchestrator.run_translation_process)
+    params = sig.parameters
+    assert 'auto_epub' in params
+    assert params['auto_epub'].default is None
+
+
 def test_run_single_worker_signature():
-    """_run_single_worker must accept chunks_db: Path and chapter_name: str."""
+    """_run_single_worker must accept config: WorkerConfig."""
     sig = inspect.signature(orchestrator._run_single_worker)
     params = list(sig.parameters)
-    assert 'chunks_db' in params
-    assert 'chapter_name' in params
-    assert 'volume_paths' in params
-    # Old params that should be gone
+    assert 'config' in params
+    assert 'chunk' in params
+    assert 'prompt_template' in params
+    assert 'step_name' in params
+    # Old flat params that should be gone (now inside WorkerConfig)
     assert 'db_path' not in params
     assert 'project_id' not in params
     assert 'workspace_paths' not in params
+    assert 'chunks_db' not in params
+    assert 'volume_paths' not in params
 
 
 def test_run_workers_pooled_signature():
-    """_run_workers_pooled must accept chunks_db: Path and chapter_name: str."""
+    """_run_workers_pooled must accept config: WorkerConfig."""
     sig = inspect.signature(orchestrator._run_workers_pooled)
     params = list(sig.parameters)
-    assert 'chunks_db' in params
-    assert 'chapter_name' in params
-    # Old params that should be gone
+    assert 'config' in params
+    assert 'chunks' in params
+    assert 'max_workers' in params
+    # Old flat params that should be gone (now inside WorkerConfig)
     assert 'db_path' not in params
     assert 'project_id' not in params
+    assert 'chunks_db' not in params
