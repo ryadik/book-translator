@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 import json_repair
+
+_logger = logging.getLogger('system')
 
 
 def strip_code_fence(text: str) -> str:
@@ -64,6 +67,8 @@ def parse_llm_json(raw: str) -> Any:
     if isinstance(parsed, dict) and "response" in parsed and len(parsed) <= 3:
         response_text = parsed["response"]
         if isinstance(response_text, str):
+            if not response_text.strip():
+                raise ValueError("Gemini-cli вернул пустой response в обёртке")
             inner_text = strip_code_fence(response_text)
             try:
                 return json.loads(inner_text)
@@ -71,8 +76,15 @@ def parse_llm_json(raw: str) -> Any:
                 try:
                     repaired = json_repair.repair_json(inner_text)
                     return json.loads(repaired)
-                except Exception:
-                    pass  # Возвращаем внешний parsed ниже
+                except Exception as e:
+                    _logger.warning(
+                        f"[parse_llm_json] Не удалось распарсить inner JSON из обёртки gemini-cli: {e}. "
+                        f"Содержимое response (первые 300 символов): {response_text[:300]!r}"
+                    )
+                    raise ValueError(
+                        f"Не удалось распарсить inner JSON из обёртки gemini-cli: {e}\n"
+                        f"Response: {response_text[:200]!r}"
+                    )
 
     return parsed
 

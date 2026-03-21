@@ -77,3 +77,43 @@ class TestParseLlmJson:
         raw = '[]'
         result = parse_llm_json(raw)
         assert result == []
+
+
+class TestParseLlmJsonWrapper:
+    def test_wrapper_with_valid_inner_json(self):
+        """Обёртка с валидным inner JSON → возвращает inner dict."""
+        import json as _json
+        inner = '{"characters": {"hero": {"source": "Hero", "target": "Герой"}}}'
+        raw = _json.dumps({"session_id": "abc", "response": inner})
+        result = parse_llm_json(raw)
+        assert result == {"characters": {"hero": {"source": "Hero", "target": "Герой"}}}
+
+    def test_wrapper_with_code_fenced_inner_json(self):
+        """Обёртка с code-fenced inner JSON → возвращает inner dict."""
+        import json as _json
+        inner_json = '{"key": "value"}'
+        response_str = f'```json\n{inner_json}\n```'
+        raw = _json.dumps({"session_id": "abc", "response": response_str})
+        result = parse_llm_json(raw)
+        assert result == {"key": "value"}
+
+    def test_wrapper_with_empty_response_raises(self):
+        """Обёртка с пустым response → ValueError."""
+        import json as _json
+        raw = _json.dumps({"session_id": "abc", "response": ""})
+        with pytest.raises(ValueError, match="пустой response"):
+            parse_llm_json(raw)
+
+    def test_wrapper_with_whitespace_response_raises(self):
+        """Обёртка с пробельным response → ValueError."""
+        import json as _json
+        raw = _json.dumps({"session_id": "abc", "response": "   "})
+        with pytest.raises(ValueError, match="пустой response"):
+            parse_llm_json(raw)
+
+    def test_wrapper_with_invalid_inner_json_raises(self):
+        """Обёртка с невалидным inner JSON → ValueError."""
+        import json as _json
+        raw = _json.dumps({"session_id": "abc", "response": "not valid json at all!!!"})
+        with pytest.raises(ValueError):
+            parse_llm_json(raw)
