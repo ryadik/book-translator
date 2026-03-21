@@ -20,12 +20,9 @@ from book_translator import discovery
 from book_translator import path_resolver
 from book_translator import default_prompts
 from book_translator.rate_limiter import RateLimiter
-from book_translator.utils import parse_llm_json, find_tool_versions_dir
+from book_translator.utils import parse_llm_json
 from book_translator.exceptions import TranslationLockedError
 from book_translator import llm_runner
-
-
-_SUBPROCESS_CWD = find_tool_versions_dir()
 
 
 @dataclass
