@@ -111,87 +111,57 @@ Before generation, pass the text through the following strict compliance filters
 Provide the {target_lang_name} version stream exclusively as raw text. Do not include markdown wrappers like ```text.
 """
 
-TERM_DISCOVERY_PROMPT = r"""**I. РОЛЬ И ГЛАВНАЯ ЦЕЛЬ**
+TERM_DISCOVERY_PROMPT = r"""# SYSTEM PROTOCOL: GLOSSARY TERM DISCOVERY
 
-**0. Контекст:**
-Ты анализируешь текст на **{source_lang_name}** языке. Термины будут переведены на **{target_lang_name}** язык.
+## 1. CONTEXT
+You are analyzing a text fragment in **{source_lang_name}**. Your goal is to extract terms that must be translated consistently into **{target_lang_name}** throughout the entire book.
 
-**1. Твоя Личность:**
-Ты — **Эксперт-Терминолог и Аналитик Мира**. Твоя задача — отделить "зерна от плевел": найти в тексте только действительно значимые сущности, требующие фиксации в глоссарии, и отбросить всё несущественное.
+## 2. WHAT TO EXTRACT
+Extract **only** proper nouns and unique world-specific terms:
+- **Character names** — all named characters (protagonist, antagonist, side characters).
+- **Unique place names** — locations specific to this fictional world.
+- **Unique items, skills, organizations, races** — only if unique to the world (not generic concepts).
 
-**2. Твоя Задача:**
-Проанализировать фрагмент текста и извлечь из него **только имена собственные (персонажи, локации), названия (организаций, предметов, навыков) и уникальные термины**.
+## 3. WHAT TO IGNORE (STRICT)
+- Onomatopoeia and interjections — sound effects, emotional exclamations.
+- Generic nouns — words like "adventurer", "sword", "magic", "monster", "sister". These describe the world but don't need glossary entries.
+- Terms already present in the glossary — extract ONLY terms NOT already in the glossary.
 
----
+## 4. REFERENCE DATA
 
-**II. ПРИНЦИПЫ АНАЛИЗА (Что извлекать, а что игнорировать)**
-
-*   **ПРИНЦИП КАЧЕСТВА НАД КОЛИЧЕСТВОМ (ГЛАВНЫЙ):**
-    Твоя цель — не количество, а **значимость**. Термин должен быть сущностью, которая будет повторно использоваться в повествовании.
-
-*   **ЧТО ИЗВЛЕКАТЬ (Примеры):**
-    *   **Имена и фамилии:** Имена персонажей на языке оригинала с транскрипцией/переводом.
-    *   **Уникальные названия мест:** Названия локаций, специфичные для мира произведения.
-    *   **Названия предметов, навыков, рас:** Если они уникальны для мира.
-
-*   **ЧТО ИГНОРИРОВАТЬ (КАТЕГОРИЧЕСКИЙ ЗАПРЕТ):**
-    *   **Звукоподражания и ономатопея:** Любые звукоподражания на языке оригинала. Это шум, а не термины.
-    *   **Междометия и выкрики:** Эмоциональные восклицания без семантической нагрузки.
-    *   **Общеупотребительные слова:** Слова типа «авантюрист», «меч», «магия», «сёстры», «монстр». Они описывают мир, но не являются уникальными терминами, требующими фиксации.
-
----
-
-**III. РАБОЧИЙ ПРОЦЕСС И СТРУКТУРИЗАЦИЯ**
-
-1.  **Извлечение кандидатов:** Прочитай текст и выпиши все слова, которые подходят под критерии из Раздела II.
-2.  **Фильтрация по глоссарию:** Если глоссарий не пуст, убери из своего списка тех кандидатов, которые уже есть в нем. ИЗВЛЕКАЙ ТОЛЬКО ТЕ ТЕРМИНЫ, КОТОРЫХ НЕТ В ГЛОССАРИИ.
-3.  **Структуризация:** Для каждого нового термина:
-    *   **Определи категорию:** `characters`, `terminology` или `expressions`.
-    *   **Заполни три поля:** `source` (термин на языке оригинала), `target` (перевод/транскрипция на {target_lang_name}), `comment` (краткое описание термина и контекст его появления).
-
----
-
-**IV. ДАННЫЕ ДЛЯ ЗАДАЧИ**
-
-1.   **Глоссарий известных терминов:**
-    ```json
-    {glossary}
-    ```
-2.   **Стиль-гайд (правила транскрипции и оформления):**
-    ```
-    {style_guide}
-    ```
-3.   **Фрагмент текста для анализа:**
-    ```
-    {text}
-    ```
-
----
-
-**V. ФОРМАТ ВЫВОДА**
-
-*   Твой ответ должен быть **ТОЛЬКО** в формате одного валидного JSON-объекта.
-*   Если новых значимых терминов не найдено, верни пустой объект: `{ "characters": {}, "terminology": {}, "expressions": {} }`.
-
-**Пример требуемого формата вывода:**
+**Known glossary terms (do NOT re-extract these):**
 ```json
-{
-  "characters": {
-    "example_character_id": {
-      "source": "Имя на языке оригинала",
-      "target": "Перевод/транскрипция имени",
-      "comment": "Краткое описание персонажа и контекст его появления в тексте."
-    }
-  },
-  "terminology": {
-    "example_term_id": {
-      "source": "Термин на языке оригинала",
-      "target": "Перевод термина",
-      "comment": "Пояснение значения и контекст использования."
-    }
-  },
-  "expressions": {}
-}
+{glossary}
+```
+
+**Style guide (transcription and formatting rules):**
+```
+{style_guide}
+```
+
+**Text fragment to analyze:**
+```
+{text}
+```
+
+## 5. OUTPUT FORMAT
+
+Return a **JSON array** of term objects. Each object has exactly three fields:
+- `source` — the term in the original language ({source_lang_name}).
+- `target` — translation or transcription in {target_lang_name}.
+- `comment` — one sentence, max 15 words. For characters: gender + role (e.g. "male, protagonist, swordsman"). For terms/places: brief definition (e.g. "name of the adventurers guild").
+
+If no new terms are found, return an empty array: `[]`
+
+**Output ONLY the JSON array. No markdown, no explanation.**
+
+Example:
+```json
+[
+  {"source": "キリト", "target": "Кирито", "comment": "male, protagonist, solo swordsman"},
+  {"source": "ソードスキル", "target": "Навык меча", "comment": "combat technique activated by the game system"},
+  {"source": "始まりの街", "target": "Стартовый город", "comment": "starting location, floor 1 of Aincrad"}
+]
 ```
 """
 
@@ -368,18 +338,3 @@ PROMPTS = {
 }
 
 
-def get_prompt(name: str) -> str:
-    """Get a bundled default prompt by name.
-    
-    Args:
-        name: Prompt name ('translation', 'term_discovery', 'proofreading', 'global_proofreading')
-    Returns:
-        Prompt content string
-    Raises:
-        KeyError: if name not found in PROMPTS
-    """
-    if name not in PROMPTS:
-        raise KeyError(
-            f"Unknown prompt: '{name}'. Available prompts: {sorted(PROMPTS.keys())}"
-        )
-    return PROMPTS[name]
