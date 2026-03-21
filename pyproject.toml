@@ -12,7 +12,6 @@ dependencies = [
     "rich>=13.0.0",
     "tenacity>=8.0.0",
     "json-repair>=0.25.0",
-    "tomli>=2.0.0",
     "python-docx>=1.1.0",
     "ebooklib>=0.18",
 ]
@@ -28,6 +27,9 @@ book-translator = "book_translator.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+book_translator = ["data/style_guides/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

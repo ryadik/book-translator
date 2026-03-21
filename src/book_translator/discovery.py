@@ -4,28 +4,17 @@ Implements walk-up algorithm to find book-translator.toml from CWD.
 """
 from pathlib import Path
 
-MARKER_FILE = "book-translator.toml"
+import tomllib
 
-# tomllib is stdlib in Python 3.11+, tomli for older versions
-try:
-    import tomllib
-except ImportError:
-    try:
-        import tomli as tomllib
-    except ImportError:
-        tomllib = None
+MARKER_FILE = "book-translator.toml"
 
 
 def find_series_root(start_dir: Path | None = None) -> Path:
     """Walk up from start_dir (default: CWD) looking for book-translator.toml.
-    
+
     Returns the directory containing the marker file.
     Raises FileNotFoundError if not found anywhere up to filesystem root.
     """
-    if tomllib is None:
-        raise ImportError(
-            "tomllib/tomli not available. Install tomli: pip install tomli"
-        )
     current = (start_dir or Path.cwd()).resolve()
     while current != current.parent:
         if (current / MARKER_FILE).is_file():
@@ -47,10 +36,6 @@ def load_series_config(series_root: Path) -> dict:
         FileNotFoundError: if book-translator.toml doesn't exist
         ValueError: if required fields are missing
     """
-    if tomllib is None:
-        raise ImportError(
-            "tomllib/tomli not available. Install tomli: pip install tomli"
-        )
     toml_path = series_root / MARKER_FILE
     if not toml_path.is_file():
         raise FileNotFoundError(f"{MARKER_FILE} not found at {series_root}")
