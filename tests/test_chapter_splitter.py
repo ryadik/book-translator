@@ -73,3 +73,36 @@ def test_split_ids_are_sequential(tmp_path):
 
     for i, chunk in enumerate(chunks, start=1):
         assert chunk["id"] == i
+
+
+def test_split_respects_min_chunk_size_on_natural_break(tmp_path):
+    chapter_file = tmp_path / "chapter.txt"
+    content = "A" * 45 + "\n\n" + "B" * 5
+    chapter_file.write_text(content, encoding="utf-8")
+
+    chunks = split_chapter_intelligently(
+        str(chapter_file),
+        target_chars=40,
+        max_part_chars=100,
+        min_chunk_size=20,
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0]["text"] == content
+
+
+def test_split_merges_small_trailing_chunk_when_safe(tmp_path):
+    chapter_file = tmp_path / "chapter.txt"
+    content = "A" * 35 + "\n\n" + "B" * 35 + "\n\n" + "C" * 5
+    chapter_file.write_text(content, encoding="utf-8")
+
+    chunks = split_chapter_intelligently(
+        str(chapter_file),
+        target_chars=40,
+        max_part_chars=100,
+        min_chunk_size=20,
+    )
+
+    assert len(chunks) == 2
+    assert chunks[0]["text"] == "A" * 35 + "\n\n"
+    assert chunks[1]["text"] == "B" * 35 + "\n\n" + "C" * 5

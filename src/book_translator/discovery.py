@@ -74,6 +74,7 @@ def load_series_config(series_root: Path) -> dict:
     if 'workers' not in config:
         config['workers'] = {}
     config['workers'].setdefault('max_concurrent', 50)
+    config['workers'].setdefault('max_rps', 2.0)
 
     # Validate configuration values
     _validate_config(config)
@@ -112,6 +113,13 @@ def _validate_config(config: dict) -> None:
     if not isinstance(workers_max, int) or not (1 <= workers_max <= 200):
         raise ValueError(
             f"Invalid 'workers.max_concurrent': {workers_max!r}. Must be an integer between 1 and 200."
+        )
+
+    # Validate workers.max_rps (0.1..100)
+    max_rps = config['workers'].get('max_rps')
+    if not isinstance(max_rps, (int, float)) or not (0.1 <= max_rps <= 100):
+        raise ValueError(
+            f"Invalid 'workers.max_rps': {max_rps!r}. Must be a number between 0.1 and 100."
         )
 
     # Validate retry parameters

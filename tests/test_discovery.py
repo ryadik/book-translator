@@ -75,6 +75,7 @@ class TestLoadSeriesConfig:
         cfg = load_series_config(tmp_path)
         assert cfg['splitter']['target_chunk_size'] == 600
         assert cfg['splitter']['max_part_chars'] == 800
+        assert cfg['splitter']['min_chunk_size'] == 300
 
     def test_applies_default_workers(self, tmp_path):
         make_toml(tmp_path)
@@ -214,4 +215,3 @@ class TestConfigValidation:
         self._write_toml(tmp_path, '[gemini_cli]\nworker_timeout_seconds = 30.5')
         cfg = load_series_config(tmp_path)
         assert cfg['gemini_cli']['worker_timeout_seconds'] == 30.5
-
