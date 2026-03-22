@@ -1,17 +1,23 @@
-.sisyphus
-text
-translator/workspace/**
-release.md
-__pycache__
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Testing
+.pytest_cache/
 
 # book-translator state files
 .state/
 *.db-wal
 *.db-shm
 glossary.db
-*.egg-info/
-.pytest_cache/
-dist/
-build/
-*.pyc
+
+# macOS
+.DS_Store
+._*
+
+# IDE / tools
 .claude/
