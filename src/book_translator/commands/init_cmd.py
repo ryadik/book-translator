@@ -15,6 +15,13 @@ target_lang = "{target_lang}"
 
 [gemini_cli]
 model = "gemini-2.5-pro"
+worker_timeout_seconds = 120
+proofreading_timeout_seconds = 300
+
+[retry]
+max_attempts = 3
+wait_min_seconds = 4
+wait_max_seconds = 10
 
 [splitter]
 target_chunk_size = 600
@@ -23,6 +30,7 @@ min_chunk_size = 300
 
 [workers]
 max_concurrent = 50
+max_rps = 2.0
 '''
 
 WORLD_INFO_TEMPLATE = '''# Информация о мире
