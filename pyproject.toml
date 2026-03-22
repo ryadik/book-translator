@@ -29,7 +29,7 @@ book-translator = "book_translator.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-book_translator = ["data/style_guides/*.md"]
+book_translator = ["data/style_guides/*.md", "data/prompts/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

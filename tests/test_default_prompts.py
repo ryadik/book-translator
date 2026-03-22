@@ -1,5 +1,5 @@
 import pytest
-from book_translator.default_prompts import PROMPTS, TRANSLATION_PROMPT, TERM_DISCOVERY_PROMPT
+from book_translator.default_prompts import PROMPTS
 
 
 class TestDefaultPrompts:
@@ -13,14 +13,16 @@ class TestDefaultPrompts:
             assert len(content) > 100, f"Prompt '{name}' is too short: {len(content)} chars"
 
     def test_translation_has_required_placeholders(self):
-        assert '{text}' in TRANSLATION_PROMPT
-        assert '{glossary}' in TRANSLATION_PROMPT
-        assert '{style_guide}' in TRANSLATION_PROMPT
-        assert '{previous_context}' in TRANSLATION_PROMPT
+        t = PROMPTS['translation']
+        assert '{text}' in t
+        assert '{glossary}' in t
+        assert '{style_guide}' in t
+        assert '{previous_context}' in t
 
     def test_term_discovery_has_required_placeholders(self):
-        assert '{text}' in TERM_DISCOVERY_PROMPT
-        assert '{glossary}' in TERM_DISCOVERY_PROMPT
+        t = PROMPTS['term_discovery']
+        assert '{text}' in t
+        assert '{glossary}' in t
 
     def test_prompts_dict_has_four_entries(self):
         assert len(PROMPTS) == 4
