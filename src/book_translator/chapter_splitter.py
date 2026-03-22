@@ -1,15 +1,19 @@
-import os
 import re
-import sys
 from book_translator.logger import system_logger
 
-def split_chapter_intelligently(chapter_file_path, output_dir, target_chars=3000, max_part_chars=5000):
-    """
-    Splits a chapter file into smaller parts and saves them directly into output_dir.
+
+def split_chapter_intelligently(
+    chapter_file_path,
+    target_chars=3000,
+    max_part_chars=5000,
+    min_chunk_size=1,
+):
+    """Split a chapter file into chunks and return them as a list of dicts.
+
+    Returns:
+        list of {"id": int, "text": str}
     """
     system_logger.info(f"[Splitter] Обработка файла главы: {chapter_file_path}")
-    
-    os.makedirs(output_dir, exist_ok=True)
 
     with open(chapter_file_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
@@ -18,29 +22,33 @@ def split_chapter_intelligently(chapter_file_path, output_dir, target_chars=3000
     current_chunk_chars = 0
     chunk_num = 1
     chunks_data = []
-    previous_text = ""
 
-    def write_part():
-        nonlocal current_chunk_lines, current_chunk_chars, chunk_num, chunks_data, previous_text
+    def append_chunk(chunk_text):
+        nonlocal chunk_num, chunks_data
+        chunks_data.append({"id": chunk_num, "text": chunk_text})
+        system_logger.info(f"[Splitter] Чанк №{chunk_num} ({len(chunk_text)} символов)")
+        chunk_num += 1
+
+    def write_part(force=False):
+        nonlocal current_chunk_lines, current_chunk_chars, chunk_num, chunks_data
         if not current_chunk_lines:
             return
-
         chunk_text = "".join(current_chunk_lines)
-        chunks_data.append({
-            "id": chunk_num,
-            "text": chunk_text,
-            "context": previous_text
-        })
-        previous_text = chunk_text
-
-        chunk_output_file = os.path.join(output_dir, f"chunk_{chunk_num}.txt")
-
-        with open(chunk_output_file, 'w', encoding='utf-8') as out_f:
-            out_f.writelines(current_chunk_lines)
-        system_logger.info(f"[Splitter] Чанк №{chunk_num} сохранен в {chunk_output_file} ({current_chunk_chars} символов)")
+        if (
+            not force
+            and len(chunk_text) < min_chunk_size
+            and chunks_data
+            and len(chunks_data[-1]["text"]) + len(chunk_text) <= max_part_chars
+        ):
+            chunks_data[-1]["text"] += chunk_text
+            system_logger.info(
+                f"[Splitter] Последний малый фрагмент ({len(chunk_text)} символов) "
+                f"приклеен к чанку №{chunks_data[-1]['id']}"
+            )
+        else:
+            append_chunk(chunk_text)
         current_chunk_lines = []
         current_chunk_chars = 0
-        chunk_num += 1
 
     def is_scene_marker(line):
         return re.match(r'^(\s*\[\]\s*|\s*---\s*)$', line)
@@ -52,6 +60,18 @@ def split_chapter_intelligently(chapter_file_path, output_dir, target_chars=3000
     def is_blank_line(line):
         return not line.strip()
 
+    def can_split_at(index: int) -> bool:
+        left_lines = current_chunk_lines[:index + 1]
+        right_lines = current_chunk_lines[index + 1:]
+        left_chars = sum(len(line) for line in left_lines)
+        right_chars = sum(len(line) for line in right_lines)
+
+        if left_chars < min_chunk_size:
+            return False
+        if right_lines and right_chars < min_chunk_size:
+            return False
+        return True
+
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -60,13 +80,14 @@ def split_chapter_intelligently(chapter_file_path, output_dir, target_chars=3000
 
         if current_chunk_chars >= target_chars:
             best_break_index = -1
-            
+
             for j in range(len(current_chunk_lines) - 1, -1, -1):
                 current_line_in_buffer = current_chunk_lines[j]
 
                 if is_scene_marker(current_line_in_buffer):
-                    best_break_index = j
-                    break
+                    if can_split_at(j):
+                        best_break_index = j
+                        break
 
                 if is_blank_line(current_line_in_buffer):
                     next_non_blank_line_is_dialogue = False
@@ -75,11 +96,11 @@ def split_chapter_intelligently(chapter_file_path, output_dir, target_chars=3000
                             if is_dialogue_start(current_chunk_lines[k]):
                                 next_non_blank_line_is_dialogue = True
                             break
-                    
-                    if not next_non_blank_line_is_dialogue:
+
+                    if not next_non_blank_line_is_dialogue and can_split_at(j):
                         best_break_index = j
                         break
-                
+
             if best_break_index != -1:
                 temp_lines = current_chunk_lines[best_break_index + 1:]
                 current_chunk_lines = current_chunk_lines[:best_break_index + 1]
@@ -89,10 +110,10 @@ def split_chapter_intelligently(chapter_file_path, output_dir, target_chars=3000
             elif current_chunk_chars >= max_part_chars:
                 force_break_index = -1
                 for j in range(len(current_chunk_lines) - 1, -1, -1):
-                    if is_blank_line(current_chunk_lines[j]):
+                    if is_blank_line(current_chunk_lines[j]) and can_split_at(j):
                         force_break_index = j
                         break
-                
+
                 if force_break_index != -1:
                     temp_lines = current_chunk_lines[force_break_index + 1:]
                     current_chunk_lines = current_chunk_lines[:force_break_index + 1]
@@ -100,7 +121,7 @@ def split_chapter_intelligently(chapter_file_path, output_dir, target_chars=3000
                     current_chunk_lines = temp_lines
                     current_chunk_chars = sum(len(l) for l in current_chunk_lines)
                 else:
-                    write_part()
+                    write_part(force=True)
 
         i += 1
 

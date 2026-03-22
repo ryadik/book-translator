@@ -13,7 +13,7 @@ Schema Versions:
 """
 import sqlite3
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import Any
 from contextlib import contextmanager
 
 GLOSSARY_SCHEMA_VERSION = 1
@@ -26,7 +26,7 @@ def connection(db_path: Path):
     
     WAL mode must be enabled on a real file path (not :memory:).
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
     if str(db_path) != ':memory:':
@@ -140,7 +140,7 @@ def get_terms(
     db_path: Path,
     source_lang: str = 'ja',
     target_lang: str = 'ru',
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return all glossary terms for a language pair, ordered by term_source."""
     with connection(db_path) as conn:
         rows = conn.execute(
@@ -155,31 +155,6 @@ def get_terms(
     return [dict(r) for r in rows]
 
 
-def delete_term(
-    db_path: Path,
-    term_source: str,
-    source_lang: str = 'ja',
-    target_lang: str = 'ru',
-) -> bool:
-    """Delete a term. Returns True if a row was deleted."""
-    with connection(db_path) as conn:
-        cursor = conn.execute(
-            'DELETE FROM glossary WHERE term_source = ? AND source_lang = ? AND target_lang = ?',
-            (term_source, source_lang, target_lang),
-        )
-        conn.commit()
-    return cursor.rowcount > 0
-
-
-def get_term_count(db_path: Path, source_lang: str = 'ja', target_lang: str = 'ru') -> int:
-    """Return the number of glossary terms for a language pair."""
-    with connection(db_path) as conn:
-        row = conn.execute(
-            'SELECT COUNT(*) FROM glossary WHERE source_lang = ? AND target_lang = ?',
-            (source_lang, target_lang),
-        ).fetchone()
-    return row[0]
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Chunk operations
@@ -189,8 +164,8 @@ def add_chunk(
     db_path: Path,
     chapter_name: str,
     chunk_index: int,
-    content_source: Optional[str] = None,
-    content_target: Optional[str] = None,
+    content_source: str | None = None,
+    content_target: str | None = None,
     status: str = 'discovery_pending',
 ) -> None:
     """Insert or replace a chunk (upsert semantics)."""
@@ -209,7 +184,7 @@ def add_chunk(
 def get_chunks(
     db_path: Path,
     chapter_name: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return all chunks for a chapter, ordered by chunk_index."""
     with connection(db_path) as conn:
         rows = conn.execute(
@@ -224,7 +199,7 @@ def get_chunks(
     return [dict(r) for r in rows]
 
 
-def get_all_chapters(db_path: Path) -> List[str]:
+def get_all_chapters(db_path: Path) -> list[str]:
     """Return a sorted list of all unique chapter names in the chunks DB."""
     with connection(db_path) as conn:
         rows = conn.execute(
@@ -239,37 +214,91 @@ def update_chunk_status(
     chunk_index: int,
     status: str,
 ) -> None:
-    """Update the status of a specific chunk."""
+    """Update the status of a specific chunk without touching content."""
     with connection(db_path) as conn:
         conn.execute(
-            'UPDATE chunks SET status = ? WHERE chapter_name = ? AND chunk_index = ?',
+            "UPDATE chunks SET status = ?, updated_at = datetime('now') WHERE chapter_name = ? AND chunk_index = ?",
             (status, chapter_name, chunk_index),
         )
         conn.commit()
 
 
-def get_chunks_by_status(
+def update_chunk_content(
     db_path: Path,
     chapter_name: str,
+    chunk_index: int,
+    content_target: str,
     status: str,
-) -> List[Dict[str, Any]]:
-    """Return chunks for a chapter that have the given status."""
+) -> None:
+    """Update translated content and status of a specific chunk."""
+    with connection(db_path) as conn:
+        conn.execute(
+            "UPDATE chunks SET content_target = ?, status = ?, updated_at = datetime('now') WHERE chapter_name = ? AND chunk_index = ?",
+            (content_target, status, chapter_name, chunk_index),
+        )
+        conn.commit()
+
+
+def batch_update_chunks_content(
+    db_path: Path,
+    chapter_name: str,
+    updates: list[dict],
+) -> None:
+    """Atomically update content_target and status for multiple chunks.
+
+    Each dict in updates must have: chunk_index, content_target, status.
+    All updates are committed in a single transaction.
+    """
+    with connection(db_path) as conn:
+        for u in updates:
+            conn.execute(
+                'UPDATE chunks SET content_target = ?, status = ?, updated_at = datetime(\'now\') '
+                'WHERE chapter_name = ? AND chunk_index = ?',
+                (u['content_target'], u['status'], chapter_name, u['chunk_index']),
+            )
+        conn.commit()
+
+
+def clear_chapter(db_path: Path, chapter_name: str) -> None:
+    """Delete all chunks and chapter_state records for a specific chapter."""
+    with connection(db_path) as conn:
+        conn.execute('DELETE FROM chunks WHERE chapter_name = ?', (chapter_name,))
+        conn.execute('DELETE FROM chapter_state WHERE chapter_name = ?', (chapter_name,))
+        conn.commit()
+
+
+def clear_chapter_state(db_path: Path, chapter_name: str) -> None:
+    """Delete only chapter_state for a specific chapter."""
+    with connection(db_path) as conn:
+        conn.execute('DELETE FROM chapter_state WHERE chapter_name = ?', (chapter_name,))
+        conn.commit()
+
+
+
+def get_chunk_status_counts(
+    db_path: Path,
+    chapter_name: str,
+) -> dict[str, int]:
+    """Return chunk counts grouped by status for a chapter."""
     with connection(db_path) as conn:
         rows = conn.execute(
             '''
-            SELECT chapter_name, chunk_index, content_source, content_target, status
+            SELECT status, COUNT(*) AS count
             FROM chunks
-            WHERE chapter_name = ? AND status = ?
-            ORDER BY chunk_index
+            WHERE chapter_name = ?
+            GROUP BY status
             ''',
-            (chapter_name, status),
+            (chapter_name,),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return {str(r['status']): int(r['count']) for r in rows}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Chapter pipeline state operations
 # ─────────────────────────────────────────────────────────────────────────────
+
+VALID_STAGES = frozenset({'discovery', 'translation', 'proofreading', 'global_proofreading', 'complete'})
+
 
 def set_chapter_stage(db_path: Path, chapter_name: str, stage: str) -> None:
     """Set the current pipeline stage for a chapter.
@@ -277,6 +306,8 @@ def set_chapter_stage(db_path: Path, chapter_name: str, stage: str) -> None:
     Valid stages: 'discovery', 'translation', 'proofreading',
                   'global_proofreading', 'complete'
     """
+    if stage not in VALID_STAGES:
+        raise ValueError(f"Invalid stage: {stage!r}. Must be one of {sorted(VALID_STAGES)}")
     with connection(db_path) as conn:
         conn.execute(
             '''
@@ -332,5 +363,78 @@ def reset_chapter_stage(
                 updated_at = excluded.updated_at
             ''',
             (chapter_name, to_stage),
+        )
+        conn.commit()
+
+
+def promote_chapter_stage(
+    db_path: Path,
+    chapter_name: str,
+    next_stage: str,
+    expected_statuses: set[str],
+    status_mapping: dict[str, str] | None = None,
+) -> None:
+    """Atomically validate chunk statuses, update them, and advance chapter stage.
+
+    Args:
+        db_path: Path to chunks.db.
+        chapter_name: Chapter to promote.
+        next_stage: Stage to write into chapter_state.
+        expected_statuses: All chunk statuses must belong to this set.
+        status_mapping: Optional {old_status: new_status} updates applied before
+            advancing chapter_state.
+
+    Raises:
+        RuntimeError: If chapter has no chunks or contains unexpected statuses.
+        ValueError: If next_stage is invalid.
+    """
+    if next_stage not in VALID_STAGES:
+        raise ValueError(f"Invalid stage: {next_stage!r}. Must be one of {sorted(VALID_STAGES)}")
+
+    with connection(db_path) as conn:
+        rows = conn.execute(
+            '''
+            SELECT status, COUNT(*) AS count
+            FROM chunks
+            WHERE chapter_name = ?
+            GROUP BY status
+            ''',
+            (chapter_name,),
+        ).fetchall()
+
+        if not rows:
+            raise RuntimeError(f"Cannot promote chapter {chapter_name!r}: no chunks found")
+
+        status_counts = {str(r['status']): int(r['count']) for r in rows}
+        unexpected = {
+            status: count
+            for status, count in status_counts.items()
+            if status not in expected_statuses
+        }
+        if unexpected:
+            raise RuntimeError(
+                f"Cannot promote chapter {chapter_name!r} to {next_stage!r}: "
+                f"unexpected chunk statuses: {unexpected}"
+            )
+
+        for from_status, to_status in (status_mapping or {}).items():
+            conn.execute(
+                '''
+                UPDATE chunks
+                SET status = ?, updated_at = datetime('now')
+                WHERE chapter_name = ? AND status = ?
+                ''',
+                (to_status, chapter_name, from_status),
+            )
+
+        conn.execute(
+            '''
+            INSERT INTO chapter_state (chapter_name, pipeline_stage, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(chapter_name) DO UPDATE
+            SET pipeline_stage = excluded.pipeline_stage,
+                updated_at = excluded.updated_at
+            ''',
+            (chapter_name, next_stage),
         )
         conn.commit()

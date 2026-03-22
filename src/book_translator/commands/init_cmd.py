@@ -1,10 +1,9 @@
+import logging
 import shutil
+from importlib import resources
 from pathlib import Path
 
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib
+_logger = logging.getLogger(__name__)
 
 from book_translator.discovery import MARKER_FILE
 from book_translator.db import init_glossary_db
@@ -16,6 +15,13 @@ target_lang = "{target_lang}"
 
 [gemini_cli]
 model = "gemini-2.5-pro"
+worker_timeout_seconds = 120
+proofreading_timeout_seconds = 300
+
+[retry]
+max_attempts = 3
+wait_min_seconds = 4
+wait_max_seconds = 10
 
 [splitter]
 target_chunk_size = 600
@@ -24,6 +30,7 @@ min_chunk_size = 300
 
 [workers]
 max_concurrent = 50
+max_rps = 2.0
 '''
 
 WORLD_INFO_TEMPLATE = '''# Информация о мире
@@ -49,13 +56,15 @@ STYLE_GUIDE_TEMPLATE = '''## Стайлгайд перевода
 
 def _find_bundled_style_guide(source_lang: str, target_lang: str) -> Path | None:
     """Find bundled style guide for the given language pair."""
-    style_guides_dir = Path(__file__).resolve().parent.parent.parent.parent / 'data' / 'style_guides'
-    exact = style_guides_dir / f'{source_lang}_{target_lang}.md'
-    if exact.is_file():
-        return exact
-    default = style_guides_dir / 'default.md'
-    if default.is_file():
-        return default
+    style_guides_ref = resources.files('book_translator') / 'data' / 'style_guides'
+    for name in (f'{source_lang}_{target_lang}.md', 'default.md'):
+        candidate = style_guides_ref / name
+        try:
+            path = Path(str(candidate))
+            if path.is_file():
+                return path
+        except (TypeError, FileNotFoundError) as e:
+            _logger.debug("Could not resolve bundled style guide '%s': %s", name, e)
     return None
 
 def run_init(args):

@@ -1,6 +1,5 @@
 from pathlib import Path
 from book_translator.discovery import find_series_root
-from book_translator.path_resolver import resolve_volume_from_chapter
 from book_translator import orchestrator
 from book_translator.exceptions import TranslationLockedError
 import sys
@@ -36,6 +35,16 @@ def _translate_file(series_root: Path, chapter_path: Path, args):
     else:
         auto_docx = None  # Will prompt interactively
 
+    # Determine auto_epub flag
+    epub = getattr(args, 'epub', False)
+    no_epub = getattr(args, 'no_epub', False)
+    if epub:
+        auto_epub = True
+    elif no_epub:
+        auto_epub = False
+    else:
+        auto_epub = None  # Will prompt interactively
+
     restart_stage = getattr(args, 'stage', None)
     dry_run = getattr(args, 'dry_run', False)
 
@@ -47,12 +56,16 @@ def _translate_file(series_root: Path, chapter_path: Path, args):
             resume=args.resume,
             force=args.force,
             auto_docx=auto_docx,
+            auto_epub=auto_epub,
             restart_stage=restart_stage,
             dry_run=dry_run,
         )
     except TranslationLockedError as e:
         print(f"\n🔒 {e}")
-        raise SystemExit(1)
+        raise SystemExit(1) from e
+    except Exception as e:
+        print(f"\nКРИТИЧЕСКАЯ ОШИБКА: {e}", file=sys.stderr)
+        raise SystemExit(1) from e
 
 
 def run_translate_all(args):
@@ -94,4 +107,11 @@ def _translate_directory(series_root: Path, source_dir: Path, args):
 
     for i, chapter_path in enumerate(txt_files, 1):
         print(f"\n[{i}/{len(txt_files)}] Перевод: {chapter_path.name}")
-        _translate_file(series_root, chapter_path, args)
+        try:
+            _translate_file(series_root, chapter_path, args)
+        except SystemExit as e:
+            if e.code == 1:
+                # TranslationLockedError from _translate_file — skip and continue
+                print(f"   Пропуск '{chapter_path.name}' (заблокировано). Продолжаем...")
+            else:
+                raise

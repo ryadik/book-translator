@@ -21,12 +21,13 @@ class RateLimiter:
             current_time = time.monotonic()
             elapsed = current_time - self.last_call_time
             wait_time = self.min_interval - elapsed
-
             if wait_time > 0:
-                time.sleep(wait_time)
-
-            # Update the last call time *after* the sleep
-            self.last_call_time = time.monotonic()
+                self.last_call_time = current_time + wait_time
+            else:
+                self.last_call_time = current_time
+        # Sleep outside the lock so other threads can schedule their own waits concurrently
+        if wait_time > 0:
+            time.sleep(wait_time)
         return self
 
     def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: object | None) -> None:

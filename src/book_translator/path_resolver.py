@@ -4,15 +4,14 @@ Centralizes ALL path logic for the series-centric architecture.
 """
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional, Dict
 
 
 @dataclass
 class SeriesPaths:
     root: Path                       # series root (where book-translator.toml lives)
     glossary_db: Path                # root / glossary.db
-    world_info: Optional[Path]       # resolved world_info.md (volume or series level)
-    style_guide: Optional[Path]      # resolved style_guide.md (volume or series level)
+    world_info: Path | None          # resolved world_info.md (volume or series level)
+    style_guide: Path | None         # resolved style_guide.md (volume or series level)
 
 
 @dataclass
@@ -69,7 +68,7 @@ def resolve_volume_from_chapter(series_root: Path, chapter_path: Path) -> tuple:
     return volume_name, chapter_name
 
 
-def get_series_paths(series_root: Path, volume_name: Optional[str] = None) -> SeriesPaths:
+def get_series_paths(series_root: Path, volume_name: str | None = None) -> SeriesPaths:
     """Resolve series-level paths with optional volume-level context overrides.
 
     Resolution order for world_info.md and style_guide.md:
@@ -150,7 +149,7 @@ def ensure_volume_dirs(volume_paths: VolumePaths) -> None:
     volume_paths.cache_dir.mkdir(parents=True, exist_ok=True)
 
 
-def resolve_prompt(series_root: Path, prompt_name: str, bundled_prompts: Dict[str, str]) -> str:
+def resolve_prompt(series_root: Path, prompt_name: str, bundled_prompts: dict[str, str]) -> str:
     """Resolve a prompt: series override → bundled default.
 
     Checks {series_root}/prompts/{prompt_name}.txt first.

@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(pytest:*)",
-      "Bash(grep:*)",
-      "Bash(ls -la /Users/ryadik/personal/book-translator/src/book_translator/default_prompts*)"
-    ]
-  }
-}
