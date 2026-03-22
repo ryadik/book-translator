@@ -38,7 +38,7 @@ The project is a Python 3.11+ CLI that automates book translation using `gemini-
     source/             # input .txt files
     output/             # translated .txt/.docx/.epub files
     .state/
-      state.db          # per-volume chunk/chapter state
+      chunks.db         # per-volume chunk/chapter state
       .lock             # prevents concurrent runs
       logs/             # system/input/output logs
 ```
@@ -48,7 +48,7 @@ The project is a Python 3.11+ CLI that automates book translation using `gemini-
 ### Two SQLite databases
 
 - **`glossary.db`** (series-wide): stores translation terms `(term_source, term_target, source_lang, target_lang, comment)`. Schema v1.
-- **`state.db`** (per-volume): stores chunk statuses and chapter pipeline stages. Schema v2 with migrations. Both use WAL mode and foreign keys ON. Always use the `connection()` context manager from `db.py`.
+- **`chunks.db`** (per-volume): stores chunk statuses and chapter pipeline stages. Schema v2 with migrations. Both use WAL mode and foreign keys ON. Always use the `connection()` context manager from `db.py`.
 
 ### Translation pipeline (orchestrator.py)
 

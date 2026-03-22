@@ -4,57 +4,68 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Added (Multi-language support — LANG-1..11)
-- **Multi-language support**: Translation pipeline now supports any source language (ja, ko, zh, en, and others) with `source_lang`/`target_lang` from TOML config.
-- **`languages.py`**: New module with language code → name mapping (`get_language_name()`) and per-language typography rules (`get_typography_rules()`).
-- **Bundled style guides**: Language-pair-specific guides in `data/style_guides/`: `ja_ru.md`, `ko_ru.md`, `zh_ru.md`, `en_ru.md`, `default.md`.
-- **Auto style guide selection**: `init` command now automatically copies the correct bundled style guide for the language pair; falls back to `default.md` for unknown pairs.
-- **`docs/style_guide_prompt_template.md`**: LLM prompt template for generating custom style guides for any language pair.
-- **EPUB language metadata**: `convert_to_epub.py` now accepts a `language` parameter, setting correct metadata on the generated EPUB.
+### Added
+- **Multi-language support**: Translation pipeline supports any source language via `source_lang`/`target_lang` in TOML config.
+- **`languages.py`**: Language code → name mapping (`get_language_name()`) and per-language typography rules (`get_typography_rules()`).
+- **Bundled style guides**: Language-pair-specific guides (`ja_ru`, `ko_ru`, `zh_ru`, `en_ru`, `default`) with auto-selection during `init`.
+- **`docs/style_guide_prompt_template.md`**: LLM prompt template for generating custom style guides.
+- **EPUB language metadata**: `convert_to_epub.py` accepts a `language` parameter for correct EPUB metadata.
+- **`world_info.md` context**: Loaded and passed to translation, proofreading, and global proofreading prompts.
+- **Style guide in discovery**: Style guide content passed to term discovery prompt.
+- **Global proofreading rewrite**: Structured JSON diff array (`find`/`replace`) applied only on exact single matches.
+- **`llm_runner.py`**: Extracted LLM subprocess runner module.
+- **`WorkerConfig` dataclass**: Clean configuration for worker pool execution.
+- **Atomic stage transitions**: `promote_chapter_stage` ensures consistency between chapter state and chunk statuses.
+- **Chapter-specific locking**: Database locking scoped to individual chapters.
+- **`min_chunk_size` config**: Configurable minimum chunk size for chapter splitting.
+- **Configurable RPS**: `rps` field in TOML config (default 2).
+- **`--stage` flag**: Restart translation from a specific pipeline stage.
+- **Comprehensive documentation**: Wiki-style docs covering architecture, API, pipeline, concurrency, database, and testing.
 
-### Changed (Multi-language support — LANG-1..11)
-- **Prompts parametrized**: All four prompts (`translation`, `proofreading`, `global_proofreading`, `term_discovery`) now use `{target_lang_name}`, `{source_lang_name}`, and `{typography_rules}` placeholders instead of hardcoded "Russian"/"Japanese".
-- **ANCHOR D extracted**: Typography rules (Russian typesetting, ANCHOR D section) moved from inline prompt text to `languages.py` → injected via `{typography_rules}` placeholder.
-- **Term discovery JSON keys**: Discovery prompt now uses language-neutral keys `source`/`target`/`romanization` instead of `jp`/`ru`/`romaji`; backward-compatible fallback preserved in `term_collector.py` and `glossary_manager.py`.
-- **`term_collector.py`**: Refactored to use `source`/`target`/`romanization` keys with backward-compatible fallback chains for old `jp`/`ru` format.
-- **`glossary_manager.py`**: `generate_approval_tsv()` updated to use `term_source`/`term_target` keys with fallback to legacy `term_jp`/`term_ru`.
+### Changed
+- **Prompts parametrized**: All prompts use `{target_lang_name}`, `{source_lang_name}`, `{typography_rules}` placeholders instead of hardcoded languages.
+- **Term discovery simplified**: Flat JSON schema (`source`/`target`/`comment`), single-pass collection without nested grouping.
+- **Default prompts as package data**: Moved from Python raw strings to `data/prompts/*.txt`, loaded via `importlib.resources`.
+- **`WorkerConfig` simplified**: `cli_args` dict and `output_suffix` parameter replaced with `output_format: str` field.
+- **Unreachable `parsed_json is None` check**: Replaced with proper `try/except ValueError`.
+- **`term_collector.py` modernized**: Updated type hints, `source`/`target` keys with backward-compatible fallback.
+- **`glossary_manager.py`**: `generate_approval_tsv()` uses `term_source`/`term_target` keys with legacy fallback.
+- **CLI imports optimized**: Lazy loading in subcommands.
+- **Typography rules extracted**: Moved from inline prompt text to `languages.py`.
 
-### Added (Prompt quality & world_info — FIX-1..IMPROVE-6)
-- **`world_info.md` context**: `world_info.md` is now loaded and passed to translation and proofreading prompts as `{world_info}` placeholder.
-- **`style_guide` in discovery**: Style guide content is now passed to the term discovery stage prompt.
-- **Rewritten global proofreading prompt**: Now requests a structured JSON diff array with `"find"`/`"replace"` keys; applied only on exact single matches.
+### Fixed
+- **Race conditions**: Concurrent chunk processing under `ThreadPoolExecutor`.
+- **Database locking**: Parallel workers competing for SQLite connections.
+- **Off-by-one in proofreader**: `apply_diffs` applying corrections to wrong chunk.
+- **Duplicate `{text}` placeholder**: Text appeared twice in translation prompts.
+- **`content_ru` → `content_target`**: Key mismatch in proofreading stage.
+- **Global proofreading JSON keys**: Mismatch between prompt-instructed and code-expected keys.
+- **`{{` escaping**: Double-brace in prompt JSON examples caused literal `{{` in rendered prompts.
+- **`--force` scope**: Now clears chapter records, not entire database.
+- **`status` double-count**: `reading_done` was counted twice in status command.
 
-### Fixed (Prompt quality — FIX-1..4)
-- **Duplicate `{text}` placeholder**: Removed duplicate `{text}` injection that caused text to appear twice in translation prompts.
-- **`content_ru` → `content_target`**: Fixed key mismatch in proofreading — result was read from `content_ru` but LLM returned `content_target`.
-- **Global proofreading JSON key mismatch**: Fixed mismatch between prompt-instructed and code-expected JSON keys in global proofreading response.
-- **`{{` escaping in JSON examples**: Fixed double-brace escaping in prompt JSON examples that caused literal `{{` to appear in rendered prompts.
-
-### Changed (Prompt quality — IMPROVE-1..6)
-- **Removed hardcoded series references**: Removed DanMachi/specific series references from default prompts.
-- **Em-dash contradiction resolved**: Removed conflicting em-dash rule that contradicted the U+2500 dialogue operator rule in the style guide.
-- **Removed `</output>` tags**: Cleaned up prompt output wrappers that caused LLM to include stray XML tags in translated text.
-
-### Added (Phase 3 features)
-- **Translate All Command**: `translate-all` CLI command to sequentially translate all volumes in a series.
-- **Rich Status TUI**: `status` command upgraded to use `rich` for detailed table-based progress reporting.
-- **EPUB Conversion**: `convert_to_epub.py` for exporting translations to EPUB format.
-- **CLI Translation Options**: Added `--dry-run`, `--stage`, `--docx`/`--no-docx` flags.
-- **Diff Viewer**: `diff_viewer.py` for visualizing changes.
-- **Robust JSON Parsing**: `parse_llm_json` utility for handling malformed LLM JSON responses.
-- **Glossary Migration**: `migrate_glossary.py` for seamless upgrades.
-
-### Changed (Phase 3)
-- **Dependencies Management**: Removed `requirements.txt` in favor of full `pyproject.toml` specification.
-- **Database-Driven State**: Replaced file-based checkpoints with SQLite DB-driven chapter stages.
-- **Orchestrator Refactoring**: Rewrote translation pipeline for DB stages, supporting partial restarts and dry runs.
-- **Configuration Validation**: Enhanced `discovery.py` with rigorous TOML config validation.
+### Removed
+- **`diff_viewer.py`**, **`migrate_glossary.py`**, **`config.py`**, **`main.py`**: Obsolete modules.
+- **`data/` root directory**: Duplicate style guides (runtime uses `src/book_translator/data/`).
+- **`prompts/` root directory**: Duplicate of bundled package data.
+- **Dead DB functions**: `delete_term`, `get_term_count`, `get_chunks_by_status` (test-only usage).
+- **Dead import**: `resolve_volume_from_chapter` in `translate_cmd.py`.
+- **`requirements.txt`**: Replaced by `pyproject.toml`.
+- **Hardcoded series references**: DanMachi-specific content removed from prompts.
+- **Em-dash contradiction**: Conflicting rule removed from style guide.
+- **`</output>` XML tags**: Stray tags removed from prompts.
+- **`AGENTS.md`**, **`GEMINI.md`**: Redundant documentation (covered by `CLAUDE.md`).
 
 ## [Phase 3 Release]
 
 ### Added
-- **CLI with Subcommands**: Transitioned to a robust CLI architecture using `argparse` with subcommands (`init`, `translate`, `glossary`, `status`).
-- **TOML Configuration**: Introduced `book-translator.toml` for series-level configuration, replacing the old JSON config.
-- **Global Series-Level Glossary**: Implemented a global SQLite glossary database (`glossary.db`) with WAL mode enabled for concurrent access and better performance.
-- **Smart Path Resolution**: Added intelligent path resolution to automatically find the series root and configuration file from any subdirectory.
-- **Volume-Level State Isolation**: Isolated translation state (`state.db`) and temporary files to individual volume directories (`.state/`), allowing multiple volumes to be translated independently within the same series.
+- **CLI with Subcommands**: `argparse`-based architecture with `init`, `translate`, `glossary`, `status`.
+- **TOML Configuration**: `book-translator.toml` for series-level configuration.
+- **Global Series-Level Glossary**: SQLite `glossary.db` with WAL mode.
+- **Smart Path Resolution**: Auto-discovery of series root from any subdirectory.
+- **Volume-Level State Isolation**: Per-volume `state.db` in `.state/` directories.
+- **Rich Status TUI**: Table-based progress reporting via `rich`.
+- **EPUB Conversion**: `convert_to_epub.py` for EPUB export.
+- **CLI Options**: `--dry-run`, `--docx`/`--no-docx`, `--force`, `--resume` flags.
+- **Robust JSON Parsing**: `parse_llm_json` for handling malformed LLM responses.
+- **Database-Driven State**: SQLite-based chapter stages replacing file checkpoints.
