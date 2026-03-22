@@ -7,8 +7,6 @@ from book_translator.db import (
     init_chunks_db,
     add_term,
     get_terms,
-    delete_term,
-    get_term_count,
     add_chunk,
     get_chunks,
     get_all_chapters,
@@ -16,7 +14,6 @@ from book_translator.db import (
     update_chunk_content,
     clear_chapter,
     clear_chapter_state,
-    get_chunks_by_status,
     get_chunk_status_counts,
     promote_chapter_stage,
     GLOSSARY_SCHEMA_VERSION,
@@ -128,25 +125,6 @@ class TestGlossaryOperations:
         ja_terms = get_terms(glossary_db)
         assert len(ja_terms) == 0
 
-    def test_delete_term(self, glossary_db):
-        add_term(glossary_db, 'キリト', 'Кирито')
-        deleted = delete_term(glossary_db, 'キリト')
-        assert deleted is True
-        assert len(get_terms(glossary_db)) == 0
-
-    def test_delete_nonexistent_returns_false(self, glossary_db):
-        result = delete_term(glossary_db, 'nonexistent')
-        assert result is False
-
-    def test_get_term_count(self, glossary_db):
-        add_term(glossary_db, 'キリト', 'Кирито')
-        add_term(glossary_db, 'アスナ', 'Асуна')
-        assert get_term_count(glossary_db) == 2
-
-    def test_get_term_count_filters_lang(self, glossary_db):
-        add_term(glossary_db, 'test', 'тест', source_lang='en', target_lang='ru')
-        assert get_term_count(glossary_db, 'ja', 'ru') == 0
-        assert get_term_count(glossary_db, 'en', 'ru') == 1
 
 
 class TestChunkOperations:
@@ -221,15 +199,6 @@ class TestChunkOperations:
         assert chunks[0]['content_source'] == 'src'
         assert chunks[0]['content_target'] == 'translated text'
         assert chunks[0]['status'] == 'translation_done'
-
-    def test_get_chunks_by_status(self, chunks_db):
-        add_chunk(chunks_db, 'ch', 0, status='discovery_pending')
-        add_chunk(chunks_db, 'ch', 1, status='translation_done')
-        add_chunk(chunks_db, 'ch', 2, status='discovery_pending')
-        pending = get_chunks_by_status(chunks_db, 'ch', 'discovery_pending')
-        assert len(pending) == 2
-        done = get_chunks_by_status(chunks_db, 'ch', 'translation_done')
-        assert len(done) == 1
 
     def test_get_empty_chapter_returns_empty_list(self, chunks_db):
         chunks = get_chunks(chunks_db, 'nonexistent')

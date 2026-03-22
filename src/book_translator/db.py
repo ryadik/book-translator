@@ -155,31 +155,6 @@ def get_terms(
     return [dict(r) for r in rows]
 
 
-def delete_term(
-    db_path: Path,
-    term_source: str,
-    source_lang: str = 'ja',
-    target_lang: str = 'ru',
-) -> bool:
-    """Delete a term. Returns True if a row was deleted."""
-    with connection(db_path) as conn:
-        cursor = conn.execute(
-            'DELETE FROM glossary WHERE term_source = ? AND source_lang = ? AND target_lang = ?',
-            (term_source, source_lang, target_lang),
-        )
-        conn.commit()
-    return cursor.rowcount > 0
-
-
-def get_term_count(db_path: Path, source_lang: str = 'ja', target_lang: str = 'ru') -> int:
-    """Return the number of glossary terms for a language pair."""
-    with connection(db_path) as conn:
-        row = conn.execute(
-            'SELECT COUNT(*) FROM glossary WHERE source_lang = ? AND target_lang = ?',
-            (source_lang, target_lang),
-        ).fetchone()
-    return row[0]
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Chunk operations
@@ -298,24 +273,6 @@ def clear_chapter_state(db_path: Path, chapter_name: str) -> None:
         conn.execute('DELETE FROM chapter_state WHERE chapter_name = ?', (chapter_name,))
         conn.commit()
 
-
-def get_chunks_by_status(
-    db_path: Path,
-    chapter_name: str,
-    status: str,
-) -> list[dict[str, Any]]:
-    """Return chunks for a chapter that have the given status."""
-    with connection(db_path) as conn:
-        rows = conn.execute(
-            '''
-            SELECT chapter_name, chunk_index, content_source, content_target, status
-            FROM chunks
-            WHERE chapter_name = ? AND status = ?
-            ORDER BY chunk_index
-            ''',
-            (chapter_name, status),
-        ).fetchall()
-    return [dict(r) for r in rows]
 
 
 def get_chunk_status_counts(
