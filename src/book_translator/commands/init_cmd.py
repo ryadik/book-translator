@@ -1,6 +1,9 @@
+import logging
 import shutil
 from importlib import resources
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 from book_translator.discovery import MARKER_FILE
 from book_translator.db import init_glossary_db
@@ -52,8 +55,8 @@ def _find_bundled_style_guide(source_lang: str, target_lang: str) -> Path | None
             path = Path(str(candidate))
             if path.is_file():
                 return path
-        except Exception:
-            pass
+        except (TypeError, FileNotFoundError) as e:
+            _logger.debug("Could not resolve bundled style guide '%s': %s", name, e)
     return None
 
 def run_init(args):

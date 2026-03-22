@@ -1,12 +1,7 @@
-from pathlib import Path
-
 from book_translator.discovery import find_series_root, load_series_config
-from book_translator.db import (
-    get_terms, get_all_chapters, get_chunks, get_chunks_by_status, get_chapter_stage
-)
+from book_translator.db import get_terms, get_all_chapters, get_chunks, get_chapter_stage
 from book_translator.tui import console
 from rich.table import Table
-from rich.text import Text
 from rich import box
 
 
@@ -75,7 +70,7 @@ def run_status(args):
             stage = get_chapter_stage(chunks_db, chapter)
             emoji = _STATUS_EMOJI.get(stage, '⏳')
 
-            done = sum(1 for c in chunks if c['status'].endswith('_done'))
+            done = sum(1 for c in chunks if c['status'] == 'reading_done')
             errors = sum(1 for c in chunks if c['status'].endswith('_failed'))
             stage_label = stage or 'не начат'
 

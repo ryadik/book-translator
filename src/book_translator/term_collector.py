@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 from typing import Any
 from book_translator.logger import system_logger
@@ -91,21 +92,6 @@ def collect_terms_from_responses(raw_responses: list[str]) -> list[dict]:
     return unique_terms
 
 
-def save_approved_terms(terms: list[dict], glossary_db_path: Path,
-                        source_lang: str = 'ja', target_lang: str = 'ru'):
-    """Save approved terms to the series-level glossary database."""
-    count = 0
-    for term in terms:
-        term_source = term.get('source', '')
-        term_target = term.get('target', '')
-        comment = term.get('comment', '')
-        if term_source and term_target:
-            db.add_term(glossary_db_path, term_source, term_target,
-                        source_lang, target_lang, comment)
-            count += 1
-    system_logger.info(f"[TermCollector] Saved {count} terms to glossary DB.")
-
-
 def approve_via_tsv(terms: list[dict], tsv_path: Path, glossary_db_path: Path,
                     source_lang: str = 'ja', target_lang: str = 'ru'):
     """Generate TSV → wait for user edit → import approved terms."""
@@ -122,6 +108,11 @@ def approve_via_tsv(terms: list[dict], tsv_path: Path, glossary_db_path: Path,
     glossary_manager.generate_approval_tsv(term_list, tsv_path)
     print(f"\n📝 Отредактируйте файл: {tsv_path}")
     print("Удалите ненужные строки, исправьте переводы.")
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            f"Требуется интерактивное подтверждение терминов. "
+            f"TSV сохранён: {tsv_path}"
+        )
     input("Нажмите Enter когда закончите...")
     count = glossary_manager.import_tsv(glossary_db_path, tsv_path, source_lang, target_lang)
     print(f"✅ Импортировано {count} терминов")
