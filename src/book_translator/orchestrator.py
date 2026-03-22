@@ -108,12 +108,12 @@ def _is_pid_alive(pid: int) -> bool:
 @dataclass
 class WorkerConfig:
     """Shared configuration for worker pool execution."""
-    cli_args: dict[str, Any]
     volume_paths: Any  # path_resolver.VolumePaths
     model_name: str
     chunks_db: Path
     chapter_name: str
     rate_limiter: RateLimiter
+    output_format: str = "text"
     glossary_str: str = ""
     style_guide_str: str = ""
     world_info_str: str = ""
@@ -130,7 +130,6 @@ def _run_single_worker(
     chunk: dict[str, Any],
     prompt_template: str,
     step_name: str,
-    output_suffix: str,
     config: WorkerConfig,
     previous_context: str = "",
 ) -> bool:
@@ -154,7 +153,7 @@ def _run_single_worker(
         stdout_output = llm_runner.run_gemini(
             prompt=final_prompt,
             model_name=config.model_name,
-            output_format=config.cli_args.get('output_format', 'text'),
+            output_format=config.output_format,
             rate_limiter=config.rate_limiter,
             timeout=config.worker_timeout,
             retry_attempts=config.retry_attempts,
@@ -169,14 +168,15 @@ def _run_single_worker(
             db.update_chunk_status(config.chunks_db, config.chapter_name, chunk_index, f"{step_name}_failed")
             return False
 
-        if output_suffix == ".json":
-            parsed_json = parse_llm_json(stdout_output)
-            if parsed_json is None:
-                system_logger.error(f"[Orchestrator] Воркер [id: {worker_id}] для chunk_{chunk_index} вернул невалидный JSON.")
+        if config.output_format == "json":
+            try:
+                parse_llm_json(stdout_output)
+            except ValueError as e:
+                system_logger.error(f"[Orchestrator] Воркер [id: {worker_id}] для chunk_{chunk_index} вернул невалидный JSON: {e}")
                 db.update_chunk_status(config.chunks_db, config.chapter_name, chunk_index, "discovery_failed")
                 return False
             safe_chapter = config.chapter_name.replace('/', '_').replace('\\', '_')
-            output_path = config.volume_paths.cache_dir / f"{safe_chapter}_chunk_{chunk_index}{output_suffix}"
+            output_path = config.volume_paths.cache_dir / f"{safe_chapter}_chunk_{chunk_index}.json"
             try:
                 output_path.write_text(stdout_output, encoding='utf-8')
             except Exception as e:
@@ -276,7 +276,6 @@ def _run_workers_pooled(
     chunks: list[dict[str, Any]],
     prompt_template: str,
     step_name: str,
-    output_suffix: str,
     config: WorkerConfig,
     contexts: dict[int, str] | None = None,
 ):
@@ -295,7 +294,6 @@ def _run_workers_pooled(
                     chunk,
                     prompt_template,
                     step_name,
-                    output_suffix,
                     config,
                     contexts.get(chunk['chunk_index'], ""),
                 ): chunk for chunk in chunks
@@ -387,7 +385,6 @@ def run_translation_process(
 
     # Base worker configuration (glossary_str set per stage below)
     base_config = WorkerConfig(
-        cli_args={},
         volume_paths=volume_paths,
         model_name=model_name,
         chunks_db=chunks_db,
@@ -471,9 +468,9 @@ def run_translation_process(
 
             pending_chunks = [c for c in db.get_chunks(chunks_db, chapter_name) if c['status'] == 'discovery_pending']
             if pending_chunks:
-                discovery_config = dc_replace(base_config, cli_args={"output_format": "json"}, glossary_str=glossary_content)
+                discovery_config = dc_replace(base_config, output_format="json", glossary_str=glossary_content)
                 success = _run_workers_pooled(
-                    max_workers, pending_chunks, term_prompt_template, "discovery", ".json",
+                    max_workers, pending_chunks, term_prompt_template, "discovery",
                     discovery_config,
                 )
                 if not success:
@@ -521,9 +518,9 @@ def run_translation_process(
                     contexts[chunk['chunk_index']] = all_chunks[i-1]['content_source']
 
             if pending_chunks:
-                translation_config = dc_replace(base_config, cli_args={"output_format": "text"}, glossary_str=glossary_content)
+                translation_config = dc_replace(base_config, glossary_str=glossary_content)
                 success = _run_workers_pooled(
-                    max_workers, pending_chunks, translation_prompt_template, "translation", ".txt",
+                    max_workers, pending_chunks, translation_prompt_template, "translation",
                     translation_config, contexts=contexts,
                 )
                 if not success:
@@ -558,9 +555,9 @@ def run_translation_process(
                     contexts[chunk['chunk_index']] = all_chunks[i-1]['content_target'] or ""
 
             if pending_chunks:
-                proofreading_config = dc_replace(base_config, cli_args={"output_format": "text"}, glossary_str=glossary_content)
+                proofreading_config = dc_replace(base_config, glossary_str=glossary_content)
                 success = _run_workers_pooled(
-                    max_workers, pending_chunks, proofreading_prompt_template, "reading", ".txt",
+                    max_workers, pending_chunks, proofreading_prompt_template, "reading",
                     proofreading_config, contexts=contexts,
                 )
                 if not success:
