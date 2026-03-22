@@ -25,6 +25,69 @@ from book_translator.exceptions import TranslationLockedError
 from book_translator import llm_runner
 
 
+def _safe_chapter_name(chapter_name: str) -> str:
+    return chapter_name.replace('/', '_').replace('\\', '_')
+
+
+def _chapter_lock_path(volume_paths: Any, chapter_name: str) -> Path:
+    return volume_paths.state_dir / f".lock.{_safe_chapter_name(chapter_name)}"
+
+
+def _read_lock_metadata(lock_file: Path) -> dict[str, Any] | None:
+    try:
+        return json.loads(lock_file.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+
+
+def _acquire_chapter_lock(lock_file: Path, chapter_name: str, force: bool) -> dict[str, Any]:
+    run_id = uuid.uuid4().hex
+    lock_payload = {
+        'pid': os.getpid(),
+        'chapter_name': chapter_name,
+        'run_id': run_id,
+    }
+
+    if force and lock_file.exists():
+        lock_file.unlink()
+
+    while True:
+        try:
+            with lock_file.open('x', encoding='utf-8') as f:
+                json.dump(lock_payload, f, ensure_ascii=False)
+            return lock_payload
+        except FileExistsError:
+            metadata = _read_lock_metadata(lock_file) or {}
+            pid = metadata.get('pid')
+            if isinstance(pid, int) and _is_pid_alive(pid):
+                raise TranslationLockedError(
+                    f"Обнаружена блокировка для главы '{chapter_name}' (PID {pid}). "
+                    "Используйте `--force` для принудительного сброса."
+                )
+            lock_file.unlink(missing_ok=True)
+
+
+def _release_chapter_lock(lock_file: Path, run_id: str) -> None:
+    if not lock_file.exists():
+        return
+    metadata = _read_lock_metadata(lock_file)
+    if metadata and metadata.get('run_id') != run_id:
+        system_logger.warning("[Orchestrator] Lock уже принадлежит другому run; чужую блокировку не удаляю.")
+        return
+    lock_file.unlink(missing_ok=True)
+
+
+def _cleanup_chapter_artifacts(volume_paths: Any, chapter_name: str) -> None:
+    safe_chapter = _safe_chapter_name(chapter_name)
+    for cache_file in volume_paths.cache_dir.glob(f"{safe_chapter}_chunk_*.json"):
+        cache_file.unlink(missing_ok=True)
+
+    for ext in ('.txt', '.docx', '.epub'):
+        (volume_paths.output_dir / f'{chapter_name}{ext}').unlink(missing_ok=True)
+
+    (volume_paths.state_dir / f'pending_terms_{safe_chapter}.tsv').unlink(missing_ok=True)
+
+
 def _reset_in_progress_to_failed(chunks_db: Path, chapter_name: str) -> None:
     """Reset any *_in_progress chunks to *_failed so next --resume can retry them."""
     for chunk in db.get_chunks(chunks_db, chapter_name):
@@ -101,13 +164,25 @@ def _run_single_worker(
             label=f"chunk_{chunk_index}",
         )
 
+        if not stdout_output or not stdout_output.strip():
+            system_logger.error(f"[Orchestrator] Воркер [id: {worker_id}] для chunk_{chunk_index} вернул пустой ответ.")
+            db.update_chunk_status(config.chunks_db, config.chapter_name, chunk_index, f"{step_name}_failed")
+            return False
+
         if output_suffix == ".json":
+            parsed_json = parse_llm_json(stdout_output)
+            if parsed_json is None:
+                system_logger.error(f"[Orchestrator] Воркер [id: {worker_id}] для chunk_{chunk_index} вернул невалидный JSON.")
+                db.update_chunk_status(config.chunks_db, config.chapter_name, chunk_index, "discovery_failed")
+                return False
             safe_chapter = config.chapter_name.replace('/', '_').replace('\\', '_')
             output_path = config.volume_paths.cache_dir / f"{safe_chapter}_chunk_{chunk_index}{output_suffix}"
             try:
                 output_path.write_text(stdout_output, encoding='utf-8')
             except Exception as e:
                 system_logger.error(f"[Orchestrator] Ошибка при записи вывода от воркера [id: {worker_id}]: {e}")
+                db.update_chunk_status(config.chunks_db, config.chapter_name, chunk_index, "discovery_failed")
+                return False
 
         system_logger.info(f"[Orchestrator] Воркер [id: {worker_id}] для chunk_{chunk_index} успешно завершен.")
 
@@ -131,12 +206,15 @@ def _run_global_proofreading(
     model_name: str,
     rate_limiter: RateLimiter,
     proofreading_timeout: int = 300,
+    retry_attempts: int = 3,
+    retry_wait_min: int = 4,
+    retry_wait_max: int = 10,
     progress=None,
     task_id=None,
     glossary_str: str = "",
     style_guide_str: str = "",
     target_lang_name: str = "Russian"
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], bool]:
     system_logger.info("[Orchestrator] Запуск глобальной вычитки...")
 
     # Format chunks for the prompt
@@ -158,9 +236,9 @@ def _run_global_proofreading(
             output_format='json',
             rate_limiter=rate_limiter,
             timeout=proofreading_timeout,
-            retry_attempts=1,
-            retry_wait_min=4,
-            retry_wait_max=10,
+            retry_attempts=retry_attempts,
+            retry_wait_min=retry_wait_min,
+            retry_wait_max=retry_wait_max,
             worker_id='global',
             label='global_proofreading',
         )
@@ -169,25 +247,28 @@ def _run_global_proofreading(
 
         if not isinstance(diffs, list):
             system_logger.warning(f"[Orchestrator] Глобальная вычитка вернула не список. Пропуск. Ответ: {stdout[:200]}")
-            return chunks
+            return chunks, False
 
         system_logger.info(f"[Orchestrator] Получено {len(diffs)} правок от глобальной вычитки.")
-        updated_chunks = proofreader.apply_diffs(chunks, diffs)
+        updated_chunks, applied, skipped = proofreader.apply_diffs(chunks, diffs)
+        system_logger.info(f"[Orchestrator] Правки применены: {applied}, пропущено: {skipped}.")
+        if skipped > 0:
+            system_logger.warning(f"[Orchestrator] {skipped} правок не применено — текст изменился или совпадений нет.")
 
         if progress and task_id is not None:
             progress.update(task_id, advance=1)
 
-        return updated_chunks
+        return updated_chunks, True
 
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         system_logger.error(f"[Orchestrator] Ошибка глобальной вычитки: {e}")
-        return chunks
+        return chunks, False
     except ValueError as e:
         system_logger.error(f"[Orchestrator] Ошибка парсинга JSON от глобальной вычитки: {e}")
-        return chunks
+        return chunks, False
     except Exception as e:
         system_logger.critical(f"[Orchestrator] Неожиданная ошибка при глобальной вычитке: {e}", exc_info=True)
-        return chunks
+        return chunks, False
 
 
 def _run_workers_pooled(
@@ -283,30 +364,16 @@ def run_translation_process(
     glossary_db = series_root / 'glossary.db'
     chunks_db = volume_paths.chunks_db
     db.init_chunks_db(chunks_db)
-    rate_limiter = RateLimiter(2.0)
+    rate_limiter = RateLimiter(cfg['workers']['max_rps'])
 
-    lock_file = volume_paths.state_dir / '.lock'
-
-    if lock_file.exists() and not resume:
-        try:
-            pid = int(lock_file.read_text().strip())
-            if _is_pid_alive(pid):
-                raise TranslationLockedError(
-                    f"Обнаружена блокировка для главы '{chapter_name}' (PID {pid}). "
-                    "Используйте `--resume` для продолжения или `--force` для сброса."
-                )
-            else:
-                system_logger.warning(f"[Orchestrator] Устаревший lock-файл (PID {pid} мёртв). Удаляю lock.")
-                lock_file.unlink()
-        except (ValueError, OSError):
-            lock_file.unlink()
+    lock_file = _chapter_lock_path(volume_paths, chapter_name)
+    lock_payload: dict[str, Any] | None = None
 
     if force and volume_paths.state_dir.exists():
         system_logger.info(f"[Orchestrator] Обнаружен флаг `--force`. Очистка состояния главы '{chapter_name}'...")
-        if lock_file.exists():
-            lock_file.unlink()
         db.init_chunks_db(chunks_db)
         db.clear_chapter(chunks_db, chapter_name)
+        _cleanup_chapter_artifacts(volume_paths, chapter_name)
 
     # Load prompts
     term_prompt_template = path_resolver.resolve_prompt(series_root, 'term_discovery', default_prompts.PROMPTS)
@@ -341,6 +408,7 @@ def run_translation_process(
     if restart_stage and restart_stage in _STAGE_PENDING_STATUS:
         system_logger.info(f"[Orchestrator] Принудительный перезапуск этапа: {restart_stage}")
         db.reset_chapter_stage(chunks_db, chapter_name, restart_stage, _STAGE_PENDING_STATUS[restart_stage])
+        _cleanup_chapter_artifacts(volume_paths, chapter_name)
 
     # Dry-run: show plan without making API calls
     if dry_run:
@@ -362,7 +430,7 @@ def run_translation_process(
         return
 
     try:
-        lock_file.write_text(str(os.getpid()))
+        lock_payload = _acquire_chapter_lock(lock_file, chapter_name, force)
         system_logger.info(f"[Orchestrator] Рабочая директория для главы '{chapter_name}' заблокирована.")
 
         if resume:
@@ -375,12 +443,19 @@ def run_translation_process(
 
         # --- Этап 0: Разделение на чанки ---
         chunks = db.get_chunks(chunks_db, chapter_name)
-        if not chunks and not resume:
+        if not chunks:
+            if db.get_chapter_stage(chunks_db, chapter_name) is not None:
+                system_logger.warning(
+                    "[Orchestrator] Обнаружен chapter_state без чанков. "
+                    "Сбрасываю состояние главы и выполняю чанкинг заново."
+                )
+                db.clear_chapter_state(chunks_db, chapter_name)
             system_logger.info("[Orchestrator] Разделение главы на чанки...")
             chunks_data = chapter_splitter.split_chapter_intelligently(
                 str(chapter_path),
                 cfg['splitter']['target_chunk_size'],
-                cfg['splitter']['max_part_chars']
+                cfg['splitter']['max_part_chars'],
+                cfg['splitter']['min_chunk_size'],
             )
             for chunk_data in chunks_data:
                 db.add_chunk(chunks_db, chapter_name, chunk_data['id'], content_source=chunk_data['text'], status="discovery_pending")
@@ -390,6 +465,7 @@ def run_translation_process(
         stage = db.get_chapter_stage(chunks_db, chapter_name)
         if stage not in ('translation', 'proofreading', 'global_proofreading', 'complete'):
             system_logger.info("\n--- ЭТАП 1: Поиск новых терминов ---")
+            _cleanup_chapter_artifacts(volume_paths, chapter_name)
             terms = db.get_terms(glossary_db, source_lang, target_lang)
             glossary_content = json.dumps([dict(t) for t in terms], ensure_ascii=False, indent=2)
 
@@ -407,23 +483,25 @@ def run_translation_process(
 
             system_logger.info("\n--- Сбор и подтверждение терминов ---")
             raw_responses = []
-            safe_chapter = chapter_name.replace('/', '_').replace('\\', '_')
-            for json_file in volume_paths.cache_dir.glob(f"{safe_chapter}_chunk_*.json"):
+            safe_chapter = _safe_chapter_name(chapter_name)
+            for json_file in sorted(volume_paths.cache_dir.glob(f"{safe_chapter}_chunk_*.json")):
                 raw_responses.append(json_file.read_text(encoding='utf-8'))
 
             new_terms = term_collector.collect_terms_from_responses(raw_responses)
             if new_terms:
-                tsv_path = volume_paths.state_dir / 'pending_terms.tsv'
+                tsv_path = volume_paths.state_dir / f'pending_terms_{safe_chapter}.tsv'
                 term_collector.approve_via_tsv(new_terms, tsv_path, glossary_db, source_lang, target_lang)
             else:
                 system_logger.info("[TermCollector] Новых терминов для добавления не найдено.")
 
-            db.set_chapter_stage(chunks_db, chapter_name, 'translation')
+            db.promote_chapter_stage(
+                chunks_db,
+                chapter_name,
+                'translation',
+                expected_statuses={'discovery_done'},
+                status_mapping={'discovery_done': 'translation_pending'},
+            )
             system_logger.info("[Orchestrator] Этап discovery завершён.")
-
-            for chunk in db.get_chunks(chunks_db, chapter_name):
-                if chunk['status'] == 'discovery_done':
-                    db.update_chunk_status(chunks_db, chapter_name, chunk['chunk_index'], "translation_pending")
         else:
             system_logger.info("\n[Orchestrator] Обнаружен чекпоинт. Пропуск этапа поиска терминов.")
 
@@ -453,12 +531,14 @@ def run_translation_process(
                     system_logger.error("[Orchestrator] Этап перевода завершился с ошибками.")
                     return
 
-            db.set_chapter_stage(chunks_db, chapter_name, 'proofreading')
+            db.promote_chapter_stage(
+                chunks_db,
+                chapter_name,
+                'proofreading',
+                expected_statuses={'translation_done'},
+                status_mapping={'translation_done': 'reading_pending'},
+            )
             system_logger.info("[Orchestrator] Этап translation завершён.")
-
-            for chunk in db.get_chunks(chunks_db, chapter_name):
-                if chunk['status'] == 'translation_done':
-                    db.update_chunk_status(chunks_db, chapter_name, chunk['chunk_index'], "reading_pending")
         else:
             system_logger.info("\n[Orchestrator] Обнаружен чекпоинт. Пропуск этапа перевода.")
 
@@ -488,7 +568,12 @@ def run_translation_process(
                     system_logger.error("[Orchestrator] Этап вычитки завершился с ошибками.")
                     return
 
-            db.set_chapter_stage(chunks_db, chapter_name, 'global_proofreading')
+            db.promote_chapter_stage(
+                chunks_db,
+                chapter_name,
+                'global_proofreading',
+                expected_statuses={'reading_done'},
+            )
             system_logger.info("[Orchestrator] Этап proofreading завершён.")
         else:
             system_logger.info("\n[Orchestrator] Обнаружен чекпоинт. Пропуск этапа вычитки.")
@@ -504,12 +589,15 @@ def run_translation_process(
 
             with create_progress() as progress:
                 task_id = progress.add_task("[cyan]Processing global proofreading...", total=1)
-                updated_chunks = _run_global_proofreading(
+                updated_chunks, global_success = _run_global_proofreading(
                     all_chunks,
                     global_proofreading_prompt_template,
                     model_name,
                     rate_limiter,
                     proofreading_timeout,
+                    retry_attempts,
+                    retry_wait_min,
+                    retry_wait_max,
                     progress,
                     task_id,
                     glossary_str=glossary_content,
@@ -517,17 +605,40 @@ def run_translation_process(
                     target_lang_name=target_lang_name
                 )
 
-            for chunk in updated_chunks:
-                db.update_chunk_content(chunks_db, chapter_name, chunk['chunk_index'], chunk['content_target'], "reading_done")
+            if not global_success:
+                system_logger.error("[Orchestrator] Глобальная вычитка не завершилась корректно. Этап не будет помечен как complete.")
+                return
 
-            db.set_chapter_stage(chunks_db, chapter_name, 'complete')
+            db.batch_update_chunks_content(
+                chunks_db,
+                chapter_name,
+                [{'chunk_index': c['chunk_index'], 'content_target': c['content_target'], 'status': 'reading_done'}
+                 for c in updated_chunks],
+            )
+
+            db.promote_chapter_stage(
+                chunks_db,
+                chapter_name,
+                'complete',
+                expected_statuses={'reading_done'},
+            )
             system_logger.info("[Orchestrator] Этап global_proofreading завершён.")
         else:
             system_logger.info("\n[Orchestrator] Обнаружен чекпоинт. Пропуск этапа глобальной вычитки.")
 
         # --- ФИНАЛЬНАЯ СБОРКА ---
         system_logger.info("\n--- Сборка итогового файла ---")
-        final_chunks = [c for c in db.get_chunks(chunks_db, chapter_name) if c['status'] == 'reading_done']
+        all_final_chunks = db.get_chunks(chunks_db, chapter_name)
+        status_counts = db.get_chunk_status_counts(chunks_db, chapter_name)
+        if not all_final_chunks:
+            raise RuntimeError(f"Глава '{chapter_name}' не содержит чанков. Сборка запрещена.")
+        if set(status_counts) != {'reading_done'}:
+            raise RuntimeError(
+                f"Глава '{chapter_name}' не готова к сборке. "
+                f"Текущие статусы чанков: {status_counts}"
+            )
+
+        final_chunks = [c for c in all_final_chunks if c['status'] == 'reading_done']
         final_chunks.sort(key=lambda c: c['chunk_index'])
 
         txt_output_path = volume_paths.output_dir / f'{chapter_name}.txt'
@@ -565,10 +676,14 @@ def run_translation_process(
             except Exception as e:
                 system_logger.error(f"Ошибка конвертации в .epub: {e}")
 
+    except TranslationLockedError:
+        raise
     except Exception as e:
         system_logger.critical(f"[Orchestrator] НЕПЕРЕХВАЧЕННАЯ КРИТИЧЕСКАЯ ОШИБКА: {e}", exc_info=True)
+        raise
     finally:
-        if lock_file.exists():
-            lock_file.unlink()
+        if lock_payload is not None:
+            _release_chapter_lock(lock_file, lock_payload['run_id'])
+        if not lock_file.exists():
             system_logger.info("[Orchestrator] Блокировка снята.")
         system_logger.info("\n[Orchestrator] Процесс завершен.")

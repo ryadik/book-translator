@@ -15,7 +15,10 @@ from book_translator.db import (
     update_chunk_status,
     update_chunk_content,
     clear_chapter,
+    clear_chapter_state,
     get_chunks_by_status,
+    get_chunk_status_counts,
+    promote_chapter_stage,
     GLOSSARY_SCHEMA_VERSION,
     CHUNKS_SCHEMA_VERSION,
 )
@@ -279,3 +282,52 @@ class TestChapterState:
         chunks = get_chunks(chunks_db, 'ch')
         assert all(c['status'] == 'translation_pending' for c in chunks)
 
+    def test_clear_chapter_state_only_removes_stage(self, chunks_db):
+        add_chunk(chunks_db, 'ch', 0, status='discovery_pending')
+        set_chapter_stage(chunks_db, 'ch', 'discovery')
+
+        clear_chapter_state(chunks_db, 'ch')
+
+        assert get_chapter_stage(chunks_db, 'ch') is None
+        assert len(get_chunks(chunks_db, 'ch')) == 1
+
+    def test_get_chunk_status_counts(self, chunks_db):
+        add_chunk(chunks_db, 'ch', 0, status='reading_done')
+        add_chunk(chunks_db, 'ch', 1, status='reading_done')
+        add_chunk(chunks_db, 'ch', 2, status='translation_failed')
+
+        counts = get_chunk_status_counts(chunks_db, 'ch')
+
+        assert counts == {'reading_done': 2, 'translation_failed': 1}
+
+    def test_promote_chapter_stage_updates_statuses_atomically(self, chunks_db):
+        add_chunk(chunks_db, 'ch', 0, status='discovery_done')
+        add_chunk(chunks_db, 'ch', 1, status='discovery_done')
+
+        promote_chapter_stage(
+            chunks_db,
+            'ch',
+            'translation',
+            expected_statuses={'discovery_done'},
+            status_mapping={'discovery_done': 'translation_pending'},
+        )
+
+        assert get_chapter_stage(chunks_db, 'ch') == 'translation'
+        chunks = get_chunks(chunks_db, 'ch')
+        assert all(c['status'] == 'translation_pending' for c in chunks)
+
+    def test_promote_chapter_stage_rejects_unexpected_statuses(self, chunks_db):
+        add_chunk(chunks_db, 'ch', 0, status='discovery_done')
+        add_chunk(chunks_db, 'ch', 1, status='translation_pending')
+        set_chapter_stage(chunks_db, 'ch', 'discovery')
+
+        with pytest.raises(RuntimeError, match='unexpected chunk statuses'):
+            promote_chapter_stage(
+                chunks_db,
+                'ch',
+                'translation',
+                expected_statuses={'discovery_done'},
+                status_mapping={'discovery_done': 'translation_pending'},
+            )
+
+        assert get_chapter_stage(chunks_db, 'ch') == 'discovery'

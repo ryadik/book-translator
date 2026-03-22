@@ -14,12 +14,14 @@ def test_apply_diffs_exact_match():
         {"chunk_index": 2, "find": "для теста", "replace": "для проверки"},
     ]
 
-    updated = apply_diffs(chunks, diffs)
+    updated, applied, skipped = apply_diffs(chunks, diffs)
 
     assert updated[0]["content_target"] == "Это проверочное предложение."
     assert updated[1]["content_target"] == "Второе предложение для проверки."
     # Ensure original chunks are not mutated
     assert chunks[0]["content_target"] == "Это тестовое предложение."
+    assert applied == 2
+    assert skipped == 0
 
 
 def test_apply_diffs_1based_index_not_off_by_one():
@@ -27,7 +29,7 @@ def test_apply_diffs_1based_index_not_off_by_one():
     chunks = _chunks("первый", "второй", "третий")
     diffs = [{"chunk_index": 1, "find": "первый", "replace": "FIXED"}]
 
-    updated = apply_diffs(chunks, diffs)
+    updated, applied, skipped = apply_diffs(chunks, diffs)
 
     assert updated[0]["content_target"] == "FIXED"
     assert updated[1]["content_target"] == "второй"
@@ -38,16 +40,18 @@ def test_apply_diffs_zero_matches():
     chunks = _chunks("Это тестовое предложение.")
     diffs = [{"chunk_index": 1, "find": "отсутствующее", "replace": "новое"}]
 
-    updated = apply_diffs(chunks, diffs)
+    updated, applied, skipped = apply_diffs(chunks, diffs)
 
     assert updated[0]["content_target"] == "Это тестовое предложение."
+    assert applied == 0
+    assert skipped == 1
 
 
 def test_apply_diffs_multiple_matches():
     chunks = _chunks("Слово повторяется. Слово снова здесь.")
     diffs = [{"chunk_index": 1, "find": "Слово", "replace": "Термин"}]
 
-    updated = apply_diffs(chunks, diffs)
+    updated, applied, skipped = apply_diffs(chunks, diffs)
 
     # Should remain unchanged because "Слово" appears twice
     assert updated[0]["content_target"] == "Слово повторяется. Слово снова здесь."
@@ -60,7 +64,7 @@ def test_apply_diffs_invalid_index():
         {"chunk_index": "bad", "find": "тестовое", "replace": "проверочное"},
     ]
 
-    updated = apply_diffs(chunks, diffs)
+    updated, applied, skipped = apply_diffs(chunks, diffs)
 
     assert updated[0]["content_target"] == "Это тестовое предложение."
 
@@ -73,7 +77,7 @@ def test_apply_diffs_missing_keys():
         {"find": "тестовое", "replace": "проверочное"},  # missing chunk_index
     ]
 
-    updated = apply_diffs(chunks, diffs)
+    updated, applied, skipped = apply_diffs(chunks, diffs)
 
     assert updated[0]["content_target"] == "Это тестовое предложение."
 
@@ -85,6 +89,6 @@ def test_apply_diffs_multiple_diffs_same_chunk():
         {"chunk_index": 1, "find": "второе", "replace": "два"},
     ]
 
-    updated = apply_diffs(chunks, diffs)
+    updated, applied, skipped = apply_diffs(chunks, diffs)
 
     assert updated[0]["content_target"] == "Один слово и два слово."

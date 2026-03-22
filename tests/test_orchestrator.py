@@ -154,46 +154,43 @@ def _make_mock_series(tmp_path):
 
 
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
-@patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently')
 @patch('book_translator.orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_lock_file_created(
-    mock_input, mock_loggers, mock_splitter, mock_save_terms,
+    mock_input, mock_loggers, mock_splitter,
     mock_collect, tmp_path
 ):
-    """Lock file should be created and then removed after run."""
+    """Lock file should be created and then removed after run (even on error)."""
     series_root, chapter_path = _make_mock_series(tmp_path)
-    # Splitter returns empty — so we skip all stages
     mock_splitter.return_value = []
 
-    # Mock _run_workers_pooled to avoid gemini calls
     with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
-         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]):
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=([], True)), \
+         pytest.raises(Exception):
         orchestrator.run_translation_process(series_root, chapter_path)
 
     volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
-    lock_file = volume_paths.state_dir / '.lock'
-    # Lock file must be cleaned up after run
-    assert not lock_file.exists(), "Lock file should be removed after successful run"
+    lock_file = volume_paths.state_dir / '.lock.test-chapter'
+    # Lock file must be cleaned up in finally block even when exception raised
+    assert not lock_file.exists(), "Lock file should be removed even after error"
 
 
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
-@patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently')
 @patch('book_translator.orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_chunks_db_created(
-    mock_input, mock_loggers, mock_splitter, mock_save_terms,
+    mock_input, mock_loggers, mock_splitter,
     mock_collect, tmp_path
 ):
-    """chunks.db should be created after run_translation_process."""
+    """chunks.db should be created (initialized before pipeline starts)."""
     series_root, chapter_path = _make_mock_series(tmp_path)
-    # Splitter returns empty — so we skip all stages
     mock_splitter.return_value = []
 
     with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
-         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]):
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=([], True)), \
+         pytest.raises(Exception):
         orchestrator.run_translation_process(series_root, chapter_path)
 
     volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
@@ -201,11 +198,10 @@ def test_run_translation_process_chunks_db_created(
 
 
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
-@patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_chunks_added_to_db(
-    mock_input, mock_loggers, mock_save_terms, mock_collect, tmp_path
+    mock_input, mock_loggers, mock_collect, tmp_path
 ):
     """Chunks from splitter should be persisted to chunks.db."""
     series_root, chapter_path = _make_mock_series(tmp_path)
@@ -217,7 +213,9 @@ def test_run_translation_process_chunks_added_to_db(
 
     with patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=fake_chunks), \
          patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
-         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]):
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=([], True)), \
+         patch('book_translator.orchestrator.db.promote_chapter_stage'), \
+         pytest.raises(Exception):
         orchestrator.run_translation_process(series_root, chapter_path)
 
     volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
@@ -237,40 +235,55 @@ def test_run_translation_process_exits_on_lock(mock_loggers, mock_pid_alive, tmp
     orchestrator.path_resolver.ensure_volume_dirs(volume_paths)
     from book_translator import db as db_module
     db_module.init_chunks_db(volume_paths.chunks_db)
-    lock_file = volume_paths.state_dir / '.lock'
-    lock_file.write_text('99999')
+    lock_file = volume_paths.state_dir / '.lock.test-chapter'
+    lock_file.write_text('{"pid": 99999, "chapter_name": "test-chapter", "run_id": "existing"}')
 
     from book_translator.exceptions import TranslationLockedError
     with pytest.raises(TranslationLockedError, match="блокировка"):
         orchestrator.run_translation_process(series_root, chapter_path, resume=False)
 
 
+@patch('book_translator.orchestrator._is_pid_alive', return_value=True)
+@patch('book_translator.orchestrator.setup_loggers')
+def test_run_translation_process_resume_also_respects_live_lock(mock_loggers, mock_pid_alive, tmp_path):
+    """--resume must not bypass a live chapter lock."""
+    series_root, chapter_path = _make_mock_series(tmp_path)
+
+    volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
+    orchestrator.path_resolver.ensure_volume_dirs(volume_paths)
+    from book_translator import db as db_module
+    db_module.init_chunks_db(volume_paths.chunks_db)
+    lock_file = volume_paths.state_dir / '.lock.test-chapter'
+    lock_file.write_text('{"pid": 99999, "chapter_name": "test-chapter", "run_id": "existing"}')
+
+    from book_translator.exceptions import TranslationLockedError
+    with pytest.raises(TranslationLockedError, match="блокировка"):
+        orchestrator.run_translation_process(series_root, chapter_path, resume=True)
+
+
 
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
-@patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=[{'id': 0, 'text': 'text'}])
 @patch('book_translator.orchestrator.setup_loggers')
 @patch('builtins.input', return_value='n')
 def test_run_translation_process_user_cancel(
-    mock_input, mock_loggers, mock_splitter, mock_save_terms, mock_collect, tmp_path
+    mock_input, mock_loggers, mock_splitter, mock_collect, tmp_path
 ):
     """If user cancels during term confirmation, run should abort gracefully."""
     series_root, chapter_path = _make_mock_series(tmp_path)
 
-    with patch('book_translator.orchestrator._run_workers_pooled', return_value=True):
-        # Should return None without exception
-        result = orchestrator.run_translation_process(series_root, chapter_path)
-
-    # No exception raised means graceful abort
-    assert result is None
+    with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=([], True)), \
+         patch('book_translator.orchestrator.db.promote_chapter_stage'), \
+         pytest.raises(Exception):
+        orchestrator.run_translation_process(series_root, chapter_path)
 
 
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
-@patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently')
 @patch('book_translator.orchestrator.setup_loggers')
 def test_run_translation_process_output_file_created(
-    mock_loggers, mock_splitter, mock_save_terms, mock_collect, tmp_path
+    mock_loggers, mock_splitter, mock_collect, tmp_path
 ):
     """Output file should be created in volume output dir.
 
@@ -298,7 +311,7 @@ def test_run_translation_process_output_file_created(
     db_module.set_chapter_stage(volume_paths.chunks_db, 'test-chapter', 'complete')
 
     with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
-         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]), \
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=([], True)), \
          patch('builtins.input', return_value='n'):
         orchestrator.run_translation_process(series_root, chapter_path)
 
@@ -351,11 +364,36 @@ def test_dry_run_returns_none(mock_splitter, mock_loggers, tmp_path):
     assert result is None
 
 
+@patch('book_translator.orchestrator.setup_loggers')
+@patch('builtins.input', return_value='n')
+def test_resume_with_empty_db_still_creates_chunks(mock_input, mock_loggers, tmp_path):
+    """Empty DB + --resume must re-run chunking instead of silently skipping it."""
+    series_root, chapter_path = _make_mock_series(tmp_path)
+    volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
+    orchestrator.path_resolver.ensure_volume_dirs(volume_paths)
+    from book_translator import db as db_module
+    db_module.init_chunks_db(volume_paths.chunks_db)
+
+    fake_chunks = [
+        {'id': 1, 'text': 'テスト1'},
+        {'id': 2, 'text': 'テスト2'},
+    ]
+
+    with patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=fake_chunks), \
+         patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=([], True)), \
+         patch('book_translator.orchestrator.db.promote_chapter_stage'), \
+         pytest.raises(Exception):
+        orchestrator.run_translation_process(series_root, chapter_path, resume=True)
+
+    chunks = db_module.get_chunks(volume_paths.chunks_db, 'test-chapter')
+    assert len(chunks) == 2
+
+
 @patch('book_translator.orchestrator.term_collector.collect_terms_from_responses', return_value={})
-@patch('book_translator.orchestrator.term_collector.save_approved_terms')
 @patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently')
 @patch('book_translator.orchestrator.setup_loggers')
-def test_restart_stage_resets_db_state(mock_loggers, mock_splitter, mock_save, mock_collect, tmp_path):
+def test_restart_stage_resets_db_state(mock_loggers, mock_splitter, mock_collect, tmp_path):
     """restart_stage='translation' must reset chapter_state and chunk statuses."""
     series_root, chapter_path = _make_mock_series(tmp_path)
     mock_splitter.return_value = []
@@ -372,8 +410,10 @@ def test_restart_stage_resets_db_state(mock_loggers, mock_splitter, mock_save, m
     db_module.set_chapter_stage(volume_paths.chunks_db, 'test-chapter', 'translation')
 
     with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
-         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]), \
-         patch('builtins.input', return_value='n'):
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=([], True)), \
+         patch('book_translator.orchestrator.db.promote_chapter_stage'), \
+         patch('builtins.input', return_value='n'), \
+         pytest.raises(Exception):
         orchestrator.run_translation_process(
             series_root, chapter_path,
             restart_stage='discovery',
@@ -384,6 +424,34 @@ def test_restart_stage_resets_db_state(mock_loggers, mock_splitter, mock_save, m
     chunks = db_module.get_chunks(volume_paths.chunks_db, 'test-chapter')
     # Stage was reset — chunk was reprocessed from discovery
     assert len(chunks) >= 1  # DB still has the chunk
+
+
+@patch('book_translator.orchestrator.setup_loggers')
+@patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=[])
+def test_global_proofreading_failure_does_not_mark_complete(mock_splitter, mock_loggers, tmp_path):
+    """Failed global proofreading must not advance chapter_state to complete."""
+    series_root, chapter_path = _make_mock_series(tmp_path)
+
+    volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
+    orchestrator.path_resolver.ensure_volume_dirs(volume_paths)
+    from book_translator import db as db_module
+    db_module.init_chunks_db(volume_paths.chunks_db)
+    db_module.add_chunk(volume_paths.chunks_db, 'test-chapter', 0,
+                        content_source='テスト', content_target='Тест',
+                        status='reading_done')
+    db_module.set_chapter_stage(volume_paths.chunks_db, 'test-chapter', 'global_proofreading')
+
+    with patch('book_translator.orchestrator._run_global_proofreading', return_value=([{
+        'chapter_name': 'test-chapter',
+        'chunk_index': 0,
+        'content_source': 'テスト',
+        'content_target': 'Тест',
+        'status': 'reading_done',
+    }], False)), \
+         patch('builtins.input', return_value='n'):
+        orchestrator.run_translation_process(series_root, chapter_path, auto_docx=False, auto_epub=False)
+
+    assert db_module.get_chapter_stage(volume_paths.chunks_db, 'test-chapter') == 'global_proofreading'
 
 
 @patch('book_translator.orchestrator.setup_loggers')
@@ -403,9 +471,9 @@ def test_auto_docx_false_skips_conversion(mock_docx, mock_splitter, mock_loggers
     db_module.set_chapter_stage(volume_paths.chunks_db, 'test-chapter', 'complete')
 
     with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
-         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]):
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=([], True)):
         orchestrator.run_translation_process(
-            series_root, chapter_path, auto_docx=False
+            series_root, chapter_path, auto_docx=False, auto_epub=False
         )
 
     mock_docx.convert_txt_to_docx.assert_not_called()
@@ -429,7 +497,7 @@ def test_auto_epub_false_skips_conversion(mock_epub, mock_splitter, mock_loggers
     db_module.set_chapter_stage(volume_paths.chunks_db, 'test-chapter', 'complete')
 
     with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
-         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]), \
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=([], True)), \
          patch('builtins.input', return_value='n'):
         orchestrator.run_translation_process(
             series_root, chapter_path, auto_docx=False, auto_epub=False
@@ -455,7 +523,7 @@ def test_auto_epub_true_calls_conversion(mock_epub, mock_splitter, mock_loggers,
     db_module.set_chapter_stage(volume_paths.chunks_db, 'test-chapter', 'complete')
 
     with patch('book_translator.orchestrator._run_workers_pooled', return_value=True), \
-         patch('book_translator.orchestrator._run_global_proofreading', return_value=[]):
+         patch('book_translator.orchestrator._run_global_proofreading', return_value=([], True)):
         orchestrator.run_translation_process(
             series_root, chapter_path, auto_docx=False, auto_epub=True
         )
@@ -500,3 +568,28 @@ def test_run_workers_pooled_signature():
     assert 'db_path' not in params
     assert 'project_id' not in params
     assert 'chunks_db' not in params
+
+
+@patch('book_translator.orchestrator.llm_runner.run_gemini', return_value='[]')
+def test_global_proofreading_uses_configured_retry_values(mock_run_gemini):
+    chunks = [{'chunk_index': 1, 'content_source': 'src', 'content_target': 'tgt'}]
+    rate_limiter = orchestrator.RateLimiter(2.0)
+
+    updated_chunks, success = orchestrator._run_global_proofreading(
+        chunks=chunks,
+        prompt_template='Prompt {glossary} {style_guide} {target_lang_name}',
+        model_name='gemini-test',
+        rate_limiter=rate_limiter,
+        proofreading_timeout=111,
+        retry_attempts=7,
+        retry_wait_min=8,
+        retry_wait_max=9,
+    )
+
+    assert success is True
+    assert updated_chunks == chunks
+    kwargs = mock_run_gemini.call_args.kwargs
+    assert kwargs['retry_attempts'] == 7
+    assert kwargs['retry_wait_min'] == 8
+    assert kwargs['retry_wait_max'] == 9
+    assert kwargs['timeout'] == 111

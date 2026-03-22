@@ -64,6 +64,9 @@ def _translate_file(series_root: Path, chapter_path: Path, args):
     except TranslationLockedError as e:
         print(f"\n🔒 {e}")
         raise SystemExit(1) from e
+    except Exception as e:
+        print(f"\nКРИТИЧЕСКАЯ ОШИБКА: {e}", file=sys.stderr)
+        raise SystemExit(1) from e
 
 
 def run_translate_all(args):

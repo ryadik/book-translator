@@ -242,7 +242,7 @@ def update_chunk_status(
     """Update the status of a specific chunk without touching content."""
     with connection(db_path) as conn:
         conn.execute(
-            'UPDATE chunks SET status = ? WHERE chapter_name = ? AND chunk_index = ?',
+            "UPDATE chunks SET status = ?, updated_at = datetime('now') WHERE chapter_name = ? AND chunk_index = ?",
             (status, chapter_name, chunk_index),
         )
         conn.commit()
@@ -258,9 +258,29 @@ def update_chunk_content(
     """Update translated content and status of a specific chunk."""
     with connection(db_path) as conn:
         conn.execute(
-            'UPDATE chunks SET content_target = ?, status = ? WHERE chapter_name = ? AND chunk_index = ?',
+            "UPDATE chunks SET content_target = ?, status = ?, updated_at = datetime('now') WHERE chapter_name = ? AND chunk_index = ?",
             (content_target, status, chapter_name, chunk_index),
         )
+        conn.commit()
+
+
+def batch_update_chunks_content(
+    db_path: Path,
+    chapter_name: str,
+    updates: list[dict],
+) -> None:
+    """Atomically update content_target and status for multiple chunks.
+
+    Each dict in updates must have: chunk_index, content_target, status.
+    All updates are committed in a single transaction.
+    """
+    with connection(db_path) as conn:
+        for u in updates:
+            conn.execute(
+                'UPDATE chunks SET content_target = ?, status = ?, updated_at = datetime(\'now\') '
+                'WHERE chapter_name = ? AND chunk_index = ?',
+                (u['content_target'], u['status'], chapter_name, u['chunk_index']),
+            )
         conn.commit()
 
 
@@ -268,6 +288,13 @@ def clear_chapter(db_path: Path, chapter_name: str) -> None:
     """Delete all chunks and chapter_state records for a specific chapter."""
     with connection(db_path) as conn:
         conn.execute('DELETE FROM chunks WHERE chapter_name = ?', (chapter_name,))
+        conn.execute('DELETE FROM chapter_state WHERE chapter_name = ?', (chapter_name,))
+        conn.commit()
+
+
+def clear_chapter_state(db_path: Path, chapter_name: str) -> None:
+    """Delete only chapter_state for a specific chapter."""
+    with connection(db_path) as conn:
         conn.execute('DELETE FROM chapter_state WHERE chapter_name = ?', (chapter_name,))
         conn.commit()
 
@@ -289,6 +316,24 @@ def get_chunks_by_status(
             (chapter_name, status),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_chunk_status_counts(
+    db_path: Path,
+    chapter_name: str,
+) -> dict[str, int]:
+    """Return chunk counts grouped by status for a chapter."""
+    with connection(db_path) as conn:
+        rows = conn.execute(
+            '''
+            SELECT status, COUNT(*) AS count
+            FROM chunks
+            WHERE chapter_name = ?
+            GROUP BY status
+            ''',
+            (chapter_name,),
+        ).fetchall()
+    return {str(r['status']): int(r['count']) for r in rows}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -361,5 +406,78 @@ def reset_chapter_stage(
                 updated_at = excluded.updated_at
             ''',
             (chapter_name, to_stage),
+        )
+        conn.commit()
+
+
+def promote_chapter_stage(
+    db_path: Path,
+    chapter_name: str,
+    next_stage: str,
+    expected_statuses: set[str],
+    status_mapping: dict[str, str] | None = None,
+) -> None:
+    """Atomically validate chunk statuses, update them, and advance chapter stage.
+
+    Args:
+        db_path: Path to chunks.db.
+        chapter_name: Chapter to promote.
+        next_stage: Stage to write into chapter_state.
+        expected_statuses: All chunk statuses must belong to this set.
+        status_mapping: Optional {old_status: new_status} updates applied before
+            advancing chapter_state.
+
+    Raises:
+        RuntimeError: If chapter has no chunks or contains unexpected statuses.
+        ValueError: If next_stage is invalid.
+    """
+    if next_stage not in VALID_STAGES:
+        raise ValueError(f"Invalid stage: {next_stage!r}. Must be one of {sorted(VALID_STAGES)}")
+
+    with connection(db_path) as conn:
+        rows = conn.execute(
+            '''
+            SELECT status, COUNT(*) AS count
+            FROM chunks
+            WHERE chapter_name = ?
+            GROUP BY status
+            ''',
+            (chapter_name,),
+        ).fetchall()
+
+        if not rows:
+            raise RuntimeError(f"Cannot promote chapter {chapter_name!r}: no chunks found")
+
+        status_counts = {str(r['status']): int(r['count']) for r in rows}
+        unexpected = {
+            status: count
+            for status, count in status_counts.items()
+            if status not in expected_statuses
+        }
+        if unexpected:
+            raise RuntimeError(
+                f"Cannot promote chapter {chapter_name!r} to {next_stage!r}: "
+                f"unexpected chunk statuses: {unexpected}"
+            )
+
+        for from_status, to_status in (status_mapping or {}).items():
+            conn.execute(
+                '''
+                UPDATE chunks
+                SET status = ?, updated_at = datetime('now')
+                WHERE chapter_name = ? AND status = ?
+                ''',
+                (to_status, chapter_name, from_status),
+            )
+
+        conn.execute(
+            '''
+            INSERT INTO chapter_state (chapter_name, pipeline_stage, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(chapter_name) DO UPDATE
+            SET pipeline_stage = excluded.pipeline_stage,
+                updated_at = excluded.updated_at
+            ''',
+            (chapter_name, next_stage),
         )
         conn.commit()
