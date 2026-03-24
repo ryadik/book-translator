@@ -11,6 +11,7 @@ import pytest
 import inspect
 import ast
 import importlib
+import json
 from unittest.mock import patch, MagicMock, call
 from pathlib import Path
 from argparse import Namespace
@@ -593,3 +594,49 @@ def test_global_proofreading_uses_configured_retry_values(mock_run_gemini):
     assert kwargs['retry_wait_min'] == 8
     assert kwargs['retry_wait_max'] == 9
     assert kwargs['timeout'] == 111
+
+
+@patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=[])
+def test_failed_global_proofreading_updates_manifest_and_keeps_output_absent(mock_splitter, tmp_path):
+    series_root, chapter_path = _make_mock_series(tmp_path)
+
+    volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
+    orchestrator.path_resolver.ensure_volume_dirs(volume_paths)
+    from book_translator import db as db_module
+    db_module.init_chunks_db(volume_paths.chunks_db)
+    db_module.add_chunk(
+        volume_paths.chunks_db,
+        'test-chapter',
+        0,
+        content_source='テスト',
+        content_target='Тест',
+        status='reading_done',
+    )
+    db_module.set_chapter_stage(volume_paths.chunks_db, 'test-chapter', 'global_proofreading')
+
+    with patch(
+        'book_translator.orchestrator._run_global_proofreading',
+        return_value=([{
+            'chunk_index': 0,
+            'content_source': 'テスト',
+            'content_target': 'Тест',
+            'status': 'reading_done',
+        }], False),
+    ):
+        result = orchestrator.run_translation_process(
+            series_root,
+            chapter_path,
+            auto_docx=False,
+            auto_epub=False,
+        )
+
+    assert result is False
+    output_path = volume_paths.output_dir / 'test-chapter.txt'
+    assert not output_path.exists()
+
+    manifests = sorted((volume_paths.logs_dir / 'runs').glob('*/run.json'))
+    assert manifests, 'run manifest must be created'
+    manifest = json.loads(manifests[-1].read_text(encoding='utf-8'))
+    assert manifest['status'] == 'failed'
+    assert manifest['current_stage'] == 'global_proofreading'
+    assert 'Глобальная вычитка' in manifest['error']
