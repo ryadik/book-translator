@@ -1,0 +1,386 @@
+/* book-translator TUI stylesheet */
+
+/* ── Global ───────────────────────────────────────────────────────────────── */
+
+Screen {
+    layers: base overlay;
+}
+
+Header {
+    dock: top;
+    background: $primary-darken-2;
+}
+
+Footer {
+    dock: bottom;
+}
+
+/* ── Dashboard ────────────────────────────────────────────────────────────── */
+
+#series-info {
+    height: 3;
+    padding: 0 2;
+    background: $surface;
+    border-bottom: solid $primary-darken-3;
+    content-align: left middle;
+}
+
+#chapter-table {
+    height: 1fr;
+    margin: 1 0;
+}
+
+/* ── Translation ─────────────────────────────────────────────────────────── */
+
+#chapter-info {
+    height: 3;
+    padding: 0 2;
+    background: $surface;
+    content-align: left middle;
+}
+
+#stage-label {
+    padding: 1 2;
+    height: 3;
+}
+
+#run-status {
+    padding: 0 2;
+    height: 2;
+    color: $text-muted;
+}
+
+#chunk-progress {
+    margin: 0 2;
+}
+
+#progress-text {
+    padding: 0 2;
+    height: 1;
+    color: $text-muted;
+}
+
+#translation-log-label {
+    padding: 1 2 0 2;
+    height: 1;
+    color: $text-muted;
+}
+
+#worker-status-label {
+    padding: 1 2 0 2;
+    height: 1;
+    color: $text-muted;
+}
+
+#worker-status-table {
+    height: 9;
+    margin: 0 1;
+}
+
+#worker-filter {
+    margin: 0 2;
+    width: 40;
+}
+
+#run-summary {
+    padding: 0 2;
+    min-height: 2;
+    color: $text-muted;
+}
+
+#stage-filter {
+    margin: 0 2;
+    width: 40;
+}
+
+#log-panel {
+    height: 1fr;
+    border: solid $primary-darken-3;
+    margin: 1 1;
+}
+
+#cancel-btn {
+    margin: 1 2;
+    width: 24;
+}
+
+/* ── Glossary ─────────────────────────────────────────────────────────────── */
+
+#controls-bar {
+    height: auto;
+    padding: 1 1;
+    background: $surface;
+    align: left middle;
+}
+
+#controls-bar Input {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#controls-bar Button {
+    margin-right: 1;
+    min-width: 12;
+}
+
+#status-bar {
+    height: 1;
+    padding: 0 2;
+}
+
+#term-table {
+    height: 1fr;
+}
+
+/* ── Modals ───────────────────────────────────────────────────────────────── */
+
+_TermModal > Vertical,
+AddTermModal > Vertical {
+    align: center middle;
+    width: 60;
+    background: $surface;
+    border: thick $primary;
+    padding: 1 2;
+}
+
+TermApprovalScreen > Vertical {
+    align: center middle;
+    width: 80%;
+    max-height: 85%;
+    background: $surface;
+    border: thick $primary;
+    padding: 1 2;
+}
+
+#modal-title,
+#approval-title {
+    text-align: center;
+    padding-bottom: 1;
+    color: $text;
+}
+
+#modal-box Input {
+    margin-bottom: 1;
+}
+
+#modal-box Horizontal,
+#approval-buttons {
+    align: center middle;
+    height: 4;
+}
+
+#modal-box Horizontal Button {
+    margin: 0 1;
+}
+
+#approval-box {
+    align: center middle;
+    width: 90%;
+    max-height: 90%;
+    background: $surface;
+    border: thick $primary;
+    padding: 1 2;
+}
+
+#terms-table {
+    height: 1fr;
+    min-height: 10;
+}
+
+/* ── Config ───────────────────────────────────────────────────────────────── */
+
+#config-title {
+    height: 2;
+    padding: 0 2;
+    background: $surface;
+    content-align: left middle;
+}
+
+#config-editor {
+    height: 1fr;
+    margin: 1;
+}
+
+#status-msg {
+    height: 2;
+    padding: 0 2;
+}
+
+ConfigScreen Horizontal {
+    height: auto;
+    padding: 0 1 1 1;
+    align: left middle;
+}
+
+ConfigScreen Button {
+    margin-right: 1;
+}
+
+/* ── Prompts ──────────────────────────────────────────────────────────────── */
+
+#prompts-title {
+    height: 2;
+    padding: 0 2;
+    background: $surface;
+    content-align: left middle;
+}
+
+#prompt-selector-bar {
+    height: auto;
+    padding: 1 1;
+    background: $surface;
+}
+
+#prompt-selector-bar Select {
+    width: 50;
+}
+
+#prompt-editor {
+    height: 1fr;
+    margin: 0 1;
+}
+
+#prompt-status {
+    height: 2;
+    padding: 0 2;
+}
+
+#prompt-buttons {
+    height: auto;
+    padding: 0 1 1 1;
+    align: left middle;
+}
+
+#prompt-buttons Button {
+    margin-right: 1;
+}
+
+/* ── Init ─────────────────────────────────────────────────────────────────── */
+
+#init-box {
+    align: center middle;
+    width: 60;
+    background: $surface;
+    border: thick $primary;
+    padding: 2 3;
+    margin: 2 4;
+}
+
+#init-title {
+    text-align: center;
+    padding-bottom: 1;
+    color: $text;
+}
+
+.field-label {
+    padding-top: 1;
+    color: $text-muted;
+}
+
+#init-box Input {
+    margin-bottom: 0;
+}
+
+#init-status {
+    height: 2;
+    padding-top: 1;
+    text-align: center;
+}
+
+#init-buttons {
+    align: center middle;
+    height: auto;
+    padding-top: 1;
+}
+
+#init-buttons Button {
+    margin: 0 1;
+}
+
+/* ── Logs ─────────────────────────────────────────────────────────────────── */
+
+#log-title {
+    height: 2;
+    padding: 0 2;
+    background: $surface;
+    content-align: left middle;
+}
+
+#log-filter {
+    margin: 1 2 0 2;
+    width: 40;
+}
+
+#run-select {
+    margin: 1 2 0 2;
+    width: 70;
+}
+
+#log-view {
+    height: 1fr;
+    margin: 0 1;
+    border: solid $primary-darken-3;
+}
+
+/* ── Translation options modal ────────────────────────────────────────────── */
+
+#options-box {
+    align: center middle;
+    width: 60;
+    background: $surface;
+    border: thick $primary;
+    padding: 2 3;
+    margin: 2 4;
+}
+
+#options-title {
+    text-align: center;
+    padding-bottom: 1;
+    color: $text;
+}
+
+#options-box Checkbox {
+    margin-bottom: 0;
+}
+
+#options-box Select {
+    margin-top: 1;
+}
+
+#options-buttons {
+    align: center middle;
+    height: auto;
+    padding-top: 1;
+}
+
+#options-buttons Button {
+    margin: 0 1;
+}
+
+/* ── Confirm/Wait modals ──────────────────────────────────────────────────── */
+
+#confirm-box,
+#wait-box {
+    align: center middle;
+    width: 50;
+    background: $surface;
+    border: thick $primary;
+    padding: 2 3;
+}
+
+#confirm-label,
+#wait-label {
+    text-align: center;
+    padding-bottom: 1;
+}
+
+#confirm-box Horizontal {
+    align: center middle;
+    height: auto;
+    padding-top: 1;
+}
+
+#confirm-box Button,
+#wait-box Button {
+    margin: 0 1;
+}
