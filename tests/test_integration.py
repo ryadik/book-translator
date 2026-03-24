@@ -13,7 +13,7 @@ def create_series(tmp_path, monkeypatch, name='TestNovel'):
     return tmp_path / name
 
 
-def test_full_init_to_status_flow(tmp_path, monkeypatch):
+def test_full_init_to_status_flow(tmp_path, monkeypatch, capsys):
     """Test: init → populate glossary → status shows correct data."""
     monkeypatch.chdir(tmp_path)
     from book_translator.commands.init_cmd import run_init
@@ -29,8 +29,12 @@ def test_full_init_to_status_flow(tmp_path, monkeypatch):
     tsv.write_text('キリト\tКирито\nアスナ\tАсуна\n', encoding='utf-8')
     run_glossary(Namespace(glossary_command='import', file=str(tsv)))
     
-    # Status should not raise
+    # Status must report actual series data.
     run_status(Namespace())
+    captured = capsys.readouterr().out
+    assert 'TestNovel' in captured
+    assert 'Глоссарий: 2 терминов' in captured
+    assert 'volume-01' in captured
 
 
 def test_walk_up_from_subdirectory(tmp_path, monkeypatch):
@@ -110,8 +114,8 @@ def test_volume_context_override(tmp_path, monkeypatch):
     assert paths.world_info.read_text(encoding='utf-8') == 'Volume 1 specific context'
 
 
-def test_glossary_list_command(tmp_path, monkeypatch):
-    """Test: glossary list shows all terms without error."""
+def test_glossary_list_command_outputs_terms(tmp_path, monkeypatch, capsys):
+    """Test: glossary list must print actual term rows, not just exit cleanly."""
     series_root = create_series(tmp_path, monkeypatch)
     monkeypatch.chdir(series_root)
     
@@ -120,8 +124,11 @@ def test_glossary_list_command(tmp_path, monkeypatch):
     
     add_term(series_root / 'glossary.db', 'テスト', 'Тест')
     
-    # Should not raise
     run_glossary(Namespace(glossary_command='list'))
+    captured = capsys.readouterr().out
+    assert 'Глоссарий (1 терминов):' in captured
+    assert 'テスト' in captured
+    assert 'Тест' in captured
 
 
 def test_init_creates_valid_series_root(tmp_path, monkeypatch):

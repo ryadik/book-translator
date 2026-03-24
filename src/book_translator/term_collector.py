@@ -1,9 +1,6 @@
-import sys
 from pathlib import Path
 from typing import Any
 from book_translator.logger import system_logger
-from book_translator import db
-from book_translator import glossary_manager
 from book_translator.utils import parse_llm_json
 
 
@@ -92,27 +89,3 @@ def collect_terms_from_responses(raw_responses: list[str]) -> list[dict]:
     return unique_terms
 
 
-def approve_via_tsv(terms: list[dict], tsv_path: Path, glossary_db_path: Path,
-                    source_lang: str = 'ja', target_lang: str = 'ru'):
-    """Generate TSV → wait for user edit → import approved terms."""
-    term_list = [
-        {
-            'term_source': t.get('source', ''),
-            'term_target': t.get('target', ''),
-            'comment': t.get('comment', ''),
-        }
-        for t in terms
-        if t.get('source') and t.get('target')
-    ]
-
-    glossary_manager.generate_approval_tsv(term_list, tsv_path)
-    print(f"\n📝 Отредактируйте файл: {tsv_path}")
-    print("Удалите ненужные строки, исправьте переводы.")
-    if not sys.stdin.isatty():
-        raise RuntimeError(
-            f"Требуется интерактивное подтверждение терминов. "
-            f"TSV сохранён: {tsv_path}"
-        )
-    input("Нажмите Enter когда закончите...")
-    count = glossary_manager.import_tsv(glossary_db_path, tsv_path, source_lang, target_lang)
-    print(f"✅ Импортировано {count} терминов")

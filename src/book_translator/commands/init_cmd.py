@@ -67,12 +67,29 @@ def _find_bundled_style_guide(source_lang: str, target_lang: str) -> Path | None
             _logger.debug("Could not resolve bundled style guide '%s': %s", name, e)
     return None
 
-def run_init(args):
+
+def _print_info(message: str) -> None:
+    print(message)
+
+
+def _print_success(message: str) -> None:
+    print(message)
+
+
+def _raise_error(message: str) -> None:
+    print(message)
+    raise SystemExit(1)
+
+
+def run_init(args, info_callback=None, success_callback=None, error_callback=None):
+    info = info_callback or _print_info
+    success = success_callback or _print_success
+    error = error_callback or _raise_error
+
     series_dir = Path.cwd() / args.name
-    
+
     if series_dir.exists():
-        print(f"Ошибка: Директория '{args.name}' уже существует.")
-        raise SystemExit(1)
+        error(f"Ошибка: Директория '{args.name}' уже существует.")
     
     # Create directory structure
     series_dir.mkdir()
@@ -104,8 +121,8 @@ def run_init(args):
     (vol1 / 'source').mkdir(parents=True)
     (vol1 / 'output').mkdir()
     
-    print(f"✅ Серия '{args.name}' создана успешно!")
-    print(f"""
+    success(f"✅ Серия '{args.name}' создана успешно!")
+    info(f"""
 Структура:
   {args.name}/
   ├── book-translator.toml   ← настройки серии
