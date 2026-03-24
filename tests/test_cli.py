@@ -1,6 +1,9 @@
 import pytest
 import sys
+from unittest.mock import patch
+
 from book_translator.cli import build_parser
+from book_translator import cli
 
 
 def test_parser_init():
@@ -47,10 +50,11 @@ def test_parser_status():
     assert args.command == 'status'
 
 
-def test_parser_no_command_fails():
+def test_parser_no_command_returns_none():
+    """Without subcommand, args.command is None — TUI will be launched."""
     parser = build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args([])
+    args = parser.parse_args([])
+    assert args.command is None
 
 
 def test_parser_translate_resume_force():
@@ -66,3 +70,22 @@ def test_translate_defaults():
     assert args.debug is False
     assert args.resume is False
     assert args.force is False
+
+
+@patch("book_translator.textual_app.BookTranslatorApp.run")
+@patch.object(sys, "argv", ["book-translator"])
+def test_main_without_subcommand_launches_textual_app(mock_run):
+    cli.main()
+    mock_run.assert_called_once()
+
+
+@patch.object(sys, "argv", ["book-translator", "translate", "volume-01/source/ch.txt"])
+def test_main_translate_command_is_rejected():
+    with pytest.raises(SystemExit, match="Textual-интерфейс"):
+        cli.main()
+
+
+@patch.object(sys, "argv", ["book-translator", "translate-all"])
+def test_main_translate_all_command_is_rejected():
+    with pytest.raises(SystemExit, match="Textual-интерфейс"):
+        cli.main()

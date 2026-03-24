@@ -1,13 +1,12 @@
 import argparse
 import sys
-from pathlib import Path
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='book-translator',
         description='CLI для перевода ранобэ с использованием gemini-cli'
     )
-    subparsers = parser.add_subparsers(dest='command', required=True)
+    subparsers = parser.add_subparsers(dest='command', required=False)
 
     # --- init ---
     init_parser = subparsers.add_parser('init', help='Создать новую серию')
@@ -79,15 +78,28 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
+    if args.command is None:
+        # No subcommand — launch TUI
+        try:
+            from book_translator.textual_app import BookTranslatorApp
+            app = BookTranslatorApp()
+            app.run()
+        except ImportError:
+            parser.print_help()
+            raise SystemExit(1)
+        return
+
     if args.command == 'init':
         from book_translator.commands.init_cmd import run_init
         run_init(args)
     elif args.command == 'translate':
-        from book_translator.commands.translate_cmd import run_translate
-        run_translate(args)
+        raise SystemExit(
+            "Перевод через CLI удален. Используйте Textual-интерфейс: `book-translator`."
+        )
     elif args.command == 'translate-all':
-        from book_translator.commands.translate_cmd import run_translate_all
-        run_translate_all(args)
+        raise SystemExit(
+            "Пакетный перевод через CLI удален. Используйте Textual-интерфейс: `book-translator`."
+        )
     elif args.command == 'glossary':
         from book_translator.commands.glossary_cmd import run_glossary
         run_glossary(args)
