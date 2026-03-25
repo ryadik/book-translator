@@ -179,3 +179,31 @@ class TestResolvePrompt:
         (tmp_path / 'prompts').mkdir()
         result = resolve_prompt(tmp_path, 'translation', {'translation': 'bundled'})
         assert result == 'bundled'
+
+    def test_ollama_backend_uses_local_prompts(self, tmp_path):
+        cloud = {'translation': 'cloud prompt'}
+        local = {'translation': 'local prompt'}
+        result = resolve_prompt(tmp_path, 'translation', cloud, backend='ollama', local_prompts=local)
+        assert result == 'local prompt'
+
+    def test_gemini_backend_ignores_local_prompts(self, tmp_path):
+        cloud = {'translation': 'cloud prompt'}
+        local = {'translation': 'local prompt'}
+        result = resolve_prompt(tmp_path, 'translation', cloud, backend='gemini', local_prompts=local)
+        assert result == 'cloud prompt'
+
+    def test_series_override_wins_over_local_prompts(self, tmp_path):
+        """User override in series_root/prompts/ takes priority over any bundled prompts."""
+        prompts_dir = tmp_path / 'prompts'
+        prompts_dir.mkdir()
+        (prompts_dir / 'translation.txt').write_text('user override')
+        cloud = {'translation': 'cloud prompt'}
+        local = {'translation': 'local prompt'}
+        result = resolve_prompt(tmp_path, 'translation', cloud, backend='ollama', local_prompts=local)
+        assert result == 'user override'
+
+    def test_ollama_falls_back_to_cloud_if_no_local(self, tmp_path):
+        """If local_prompts is None, ollama backend falls back to cloud prompts."""
+        cloud = {'translation': 'cloud prompt'}
+        result = resolve_prompt(tmp_path, 'translation', cloud, backend='ollama', local_prompts=None)
+        assert result == 'cloud prompt'

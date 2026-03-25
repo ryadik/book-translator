@@ -215,3 +215,72 @@ class TestConfigValidation:
         self._write_toml(tmp_path, '[gemini_cli]\nworker_timeout_seconds = 30.5')
         cfg = load_series_config(tmp_path)
         assert cfg['gemini_cli']['worker_timeout_seconds'] == 30.5
+
+    # ── LLM backend ───────────────────────────────────────────────────────────
+
+    def test_default_backend_is_gemini(self, tmp_path):
+        self._write_toml(tmp_path)
+        cfg = load_series_config(tmp_path)
+        assert cfg['llm']['backend'] == 'gemini'
+
+    def test_default_ollama_url(self, tmp_path):
+        self._write_toml(tmp_path)
+        cfg = load_series_config(tmp_path)
+        assert cfg['llm']['ollama_url'] == 'http://localhost:11434'
+
+    def test_default_stage_models_present(self, tmp_path):
+        self._write_toml(tmp_path)
+        cfg = load_series_config(tmp_path)
+        models = cfg['llm']['models']
+        assert models['discovery'] == 'qwen3:8b'
+        assert models['translation'] == 'qwen3:30b-a3b'
+        assert models['proofreading'] == 'qwen3:30b-a3b'
+        assert models['global_proofreading'] == 'qwen3:14b'
+
+    def test_user_can_set_ollama_backend(self, tmp_path):
+        self._write_toml(tmp_path, '[llm]\nbackend = "ollama"')
+        cfg = load_series_config(tmp_path)
+        assert cfg['llm']['backend'] == 'ollama'
+
+    def test_user_can_override_individual_model(self, tmp_path):
+        self._write_toml(tmp_path, '[llm]\nbackend = "ollama"\n[llm.models]\ntranslation = "llama3.1:8b"')
+        cfg = load_series_config(tmp_path)
+        assert cfg['llm']['models']['translation'] == 'llama3.1:8b'
+        # other models keep defaults
+        assert cfg['llm']['models']['discovery'] == 'qwen3:8b'
+
+    def test_invalid_backend_raises(self, tmp_path):
+        self._write_toml(tmp_path, '[llm]\nbackend = "invalid_backend"')
+        with pytest.raises(ValueError, match="llm.backend"):
+            load_series_config(tmp_path)
+
+    def test_empty_model_name_raises(self, tmp_path):
+        self._write_toml(tmp_path, '[llm]\nbackend = "ollama"\n[llm.models]\ntranslation = ""')
+        with pytest.raises(ValueError, match="llm.models.translation"):
+            load_series_config(tmp_path)
+
+    def test_default_think_is_false(self, tmp_path):
+        self._write_toml(tmp_path)
+        cfg = load_series_config(tmp_path)
+        assert cfg['llm']['options']['think'] is False
+
+    def test_user_can_enable_think(self, tmp_path):
+        self._write_toml(tmp_path, '[llm.options]\nthink = true')
+        cfg = load_series_config(tmp_path)
+        assert cfg['llm']['options']['think'] is True
+
+    def test_default_stage_temperatures_present(self, tmp_path):
+        self._write_toml(tmp_path)
+        cfg = load_series_config(tmp_path)
+        st = cfg['llm']['options']['stage_temperature']
+        assert st['discovery'] == 0.1
+        assert st['translation'] == 0.4
+        assert st['proofreading'] == 0.3
+        assert st['global_proofreading'] == 0.1
+
+    def test_user_can_override_stage_temperature(self, tmp_path):
+        self._write_toml(tmp_path, '[llm.options.stage_temperature]\ntranslation = 0.7')
+        cfg = load_series_config(tmp_path)
+        assert cfg['llm']['options']['stage_temperature']['translation'] == 0.7
+        # Other stages keep defaults
+        assert cfg['llm']['options']['stage_temperature']['discovery'] == 0.1
