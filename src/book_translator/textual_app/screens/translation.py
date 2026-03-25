@@ -21,6 +21,7 @@ from textual.widgets import (
     Select,
     Static,
 )
+from textual.containers import Horizontal
 from textual.worker import Worker
 
 from book_translator import orchestrator
@@ -48,6 +49,7 @@ class TranslationScreen(Screen):
     BINDINGS = [
         Binding("escape", "go_back", "Назад", priority=True),
         Binding("c", "cancel_translation", "Отменить", priority=True),
+        Binding("p", "pause_translation", "Пауза", priority=True),
         Binding("f", "focus_worker_filter", "Фильтр", show=False, priority=True),
     ]
 
@@ -72,6 +74,8 @@ class TranslationScreen(Screen):
         self._current_stage = "startup"
         self._worker_rows: dict[tuple[str, str], dict[str, str]] = {}
         self._latest_error_text: str | None = None
+        self._is_paused: bool = False
+        self._is_cancelled: bool = False
 
     def compose(self) -> ComposeResult:
         flags = []
@@ -101,7 +105,9 @@ class TranslationScreen(Screen):
             id="worker-filter",
         )
         yield RichLog(id="log-panel", highlight=True, markup=False, wrap=True)
-        yield Button("Отменить", id="cancel-btn", variant="error")
+        with Horizontal(id="action-buttons"):
+            yield Button("⏸ Пауза", id="pause-btn", variant="warning")
+            yield Button("🛑 Отменить", id="cancel-btn", variant="error")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -223,7 +229,7 @@ class TranslationScreen(Screen):
     def on_translation_finished(self, event: TranslationFinished) -> None:
         bar = self.query_one("#chunk-progress", ProgressBar)
         if event.success:
-            bar.update(progress=bar.total)
+            bar.update(progress=bar.total or 100)
             self._completed_chunks = self._total_chunks
             self._tick_elapsed()
             self.query_one("#run-status", Static).update("Все этапы завершены успешно.")
@@ -232,7 +238,10 @@ class TranslationScreen(Screen):
                 self._latest_error_text or "Перевод остановлен из-за ошибки. Подробности смотрите в логах."
             )
 
+        # Update buttons
+        pause_btn = self.query_one("#pause-btn", Button)
         cancel_btn = self.query_one("#cancel-btn", Button)
+        pause_btn.disabled = True
         cancel_btn.label = "← Назад"
         cancel_btn.variant = "success" if event.success else "error"
 
@@ -250,20 +259,60 @@ class TranslationScreen(Screen):
             pass
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "cancel-btn":
-            if self._bridge and self._bridge.is_running:
+        if event.button.id == "pause-btn":
+            if self._is_paused:
+                self.action_resume_translation()
+            else:
+                self.action_pause_translation()
+        elif event.button.id == "cancel-btn":
+            if self._bridge and self._bridge.is_running and not self._is_paused:
                 self.action_cancel_translation()
             else:
                 self.action_go_back()
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
+    def action_pause_translation(self) -> None:
+        """Pause the translation process."""
+        if not self._bridge or not self._bridge.is_running or self._is_paused:
+            return
+        self._is_paused = True
+        self._bridge.pause()
+        self.query_one("#stage-label", Static).update("⏸️ Пауза...")
+        self.query_one("#run-status", Static).update("Перевод приостановлен. Нажмите 'Продолжить' для возобновления.")
+        pause_btn = self.query_one("#pause-btn", Button)
+        pause_btn.label = "▶ Продолжить"
+        pause_btn.variant = "success"
+
+    def action_resume_translation(self) -> None:
+        """Resume the translation process after pause."""
+        if not self._bridge or not self._is_paused:
+            return
+        self._is_paused = False
+        self._bridge.resume()
+        self.query_one("#stage-label", Static).update("⚙️  Возобновление...")
+        self.query_one("#run-status", Static).update("Пайплайн выполняется.")
+        pause_btn = self.query_one("#pause-btn", Button)
+        pause_btn.label = "⏸ Пауза"
+        pause_btn.variant = "warning"
+        # Restart the worker with resume flag
+        self._options["resume"] = True
+        self._start_translation()
+
     def action_cancel_translation(self) -> None:
+        """Cancel the translation process completely."""
+        self._is_cancelled = True
         if self._bridge:
             self._bridge.cancel()
         if self._worker:
             self._worker.cancel()
         self.query_one("#stage-label", Static).update("🛑 Отмена...")
+        self.query_one("#run-status", Static).update("Перевод отменён.")
+        pause_btn = self.query_one("#pause-btn", Button)
+        cancel_btn = self.query_one("#cancel-btn", Button)
+        pause_btn.disabled = True
+        cancel_btn.label = "← Назад"
+        cancel_btn.variant = "primary"
 
     def action_go_back(self) -> None:
         self.app.pop_screen()

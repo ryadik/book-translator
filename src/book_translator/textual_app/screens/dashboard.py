@@ -5,11 +5,13 @@ from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Label, Static
+from textual.widgets import DataTable, Footer, Header, Input, Label, Static, Tree
 from textual.binding import Binding
+from textual.containers import Vertical
 
 from book_translator import db, discovery
 from book_translator.textual_app.messages import DashboardRefreshRequested
+from book_translator.textual_app.screens.batch_translation import BatchTranslationScreen
 
 
 # Map chapter stage → display label
@@ -30,26 +32,29 @@ class DashboardScreen(Screen):
         Binding("r", "refresh", "Обновить", priority=True),
         Binding("enter", "translate_selected", "Перевести", priority=True),
         Binding("t", "translate_selected", "Перевести", show=False, priority=True),
+        Binding("a", "translate_all", "Все главы", priority=True),
         Binding("i", "init_series", "Новая серия", show=False, priority=True),
         Binding("g", "switch_to_glossary", "Глоссарий", priority=True),
         Binding("p", "switch_to_prompts", "Промпты", priority=True),
         Binding("c", "switch_to_config", "Конфиг", priority=True),
         Binding("l", "switch_to_logs", "Логи", priority=True),
         Binding("q", "quit", "Выход", priority=True),
+        Binding("/", "focus_search", "Поиск", priority=True),
     ]
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static(id="series-info")
-        yield DataTable(id="chapter-table", cursor_type="row")
+        with Vertical(id="dashboard-content"):
+            yield Input(placeholder="🔍 Поиск тома или главы...", id="search-input")
+            yield Tree("Серия", id="chapter-tree")
         yield Footer()
 
     def on_mount(self) -> None:
-        self._row_chapters: list[tuple[str, str]] = []
-        self._setup_table()
+        self._chapter_map: dict[str, tuple[str, str]] = {}  # tree node key -> (volume, chapter)
+        self._setup_tree()
         self._load_data()
-        # Give keyboard focus to the table immediately
-        self.query_one("#chapter-table", DataTable).focus()
+        self.query_one("#search-input", Input).focus()
 
     def _has_series_config(self) -> bool:
         try:
@@ -58,17 +63,19 @@ class DashboardScreen(Screen):
         except Exception:
             return False
 
-    def _setup_table(self) -> None:
-        table = self.query_one("#chapter-table", DataTable)
-        table.add_columns(
-            "Том", "Глава", "Этап", "Done", "Total", "Ошибки"
-        )
+    def _setup_tree(self) -> None:
+        tree = self.query_one("#chapter-tree", Tree)
+        tree.show_root = False
+        tree.guide_depth = 2
 
     def _load_data(self) -> None:
-        """Read series state from DB and populate the table."""
-        self._row_chapters = []
+        """Read series state from DB and populate the tree."""
+        self._chapter_map = {}
         app = self.app
         series_root: Path = app.series_root  # type: ignore[attr-defined]
+
+        tree = self.query_one("#chapter-tree", Tree)
+        tree.clear()
 
         # Series info header
         try:
@@ -76,13 +83,14 @@ class DashboardScreen(Screen):
             name = config["series"]["name"]
             src = config["series"]["source_lang"]
             tgt = config["series"]["target_lang"]
-            model = config.get("gemini_cli", {}).get("model", "?")
+            backend = config.get("llm", {}).get("backend", "gemini")
+            model = config.get("llm", {}).get("models", {}).get("translation", "gemini-2.5-pro")
             glossary_db = series_root / "glossary.db"
             db.init_glossary_db(glossary_db)
             term_count = len(db.get_terms(glossary_db, src, tgt))
             info_text = (
                 f"📚 [bold]{name}[/bold]  |  {src} → {tgt}  |  "
-                f"Модель: {model}  |  Терминов: {term_count}"
+                f"Бэкенд: {backend}  |  Модель: {model}  |  Терминов: {term_count}"
             )
             self.query_one("#series-info", Static).update(info_text)
         except Exception:
@@ -91,18 +99,13 @@ class DashboardScreen(Screen):
             )
             return
 
-        # Chapter table
-        table = self.query_one("#chapter-table", DataTable)
-        table.clear()
-
         volume_dirs = sorted(
             d for d in series_root.iterdir()
             if d.is_dir() and (d / "source").is_dir()
         )
 
         if not volume_dirs:
-            table.add_row("—", "Нет томов — создайте volume-XX/source/", "—", "—", "—", "—")
-            self._row_chapters.append(("", ""))
+            tree.root.add("Нет томов — создайте volume-XX/source/")
             return
 
         for vol_dir in volume_dirs:
@@ -113,8 +116,8 @@ class DashboardScreen(Screen):
             source_files = sorted(source_dir.glob("*.txt"))
 
             if not source_files:
-                table.add_row(vol_dir.name, "—", "⏳ Нет .txt файлов", "0", "0", "—")
-                self._row_chapters.append((vol_dir.name, ""))
+                vol_node = tree.root.add(f"📁 {vol_dir.name}")
+                vol_node.add("⏳ Нет .txt файлов")
                 continue
 
             # Load DB state if available
@@ -137,46 +140,97 @@ class DashboardScreen(Screen):
                 except Exception:
                     pass
 
+            # Add volume node
+            vol_node = tree.root.add(f"📁 {vol_dir.name}")
+
             for src_file in source_files:
                 chapter_name = src_file.stem
+                node_key = f"{vol_dir.name}/{chapter_name}"
+
                 if chapter_name in db_data:
                     info = db_data[chapter_name]
                     stage_label = _STAGE_LABELS.get(info["stage"], info["stage"])
-                    errors = info["errors"]
-                    table.add_row(
-                        vol_dir.name,
-                        chapter_name,
-                        stage_label,
-                        str(info["done"]),
-                        str(info["total"]),
-                        str(errors) if errors else "[dim]—[/dim]",
-                    )
+                    errors_str = f" ❌{info['errors']}" if info["errors"] else ""
+                    label = f"  📄 {chapter_name} — {stage_label} ({info['done']}/{info['total']}){errors_str}"
                 else:
-                    table.add_row(
-                        vol_dir.name,
-                        chapter_name,
-                        "⏳ Ожидание",
-                        "0",
-                        "0",
-                        "[dim]—[/dim]",
-                    )
-                self._row_chapters.append((vol_dir.name, chapter_name))
+                    label = f"  📄 {chapter_name} — ⏳ Ожидание"
+
+                chapter_node = vol_node.add(label)
+                self._chapter_map[str(chapter_node.id)] = (vol_dir.name, chapter_name)
+
+        # Apply search filter if any
+        self._apply_search()
+
+    def _apply_search(self) -> None:
+        """Filter tree based on search input."""
+        search_input = self.query_one("#search-input", Input)
+        query = search_input.value.strip().lower()
+
+        tree = self.query_one("#chapter-tree", Tree)
+
+        def filter_node(node, parent_matches: bool = False) -> bool:
+            """Recursively filter nodes. Returns True if node or any child matches."""
+            node_text = str(node.label).lower()
+            matches = query in node_text if query else True
+            matches = matches or parent_matches
+
+            # Check children
+            child_matches = False
+            for child in node.children:
+                if filter_node(child, matches):
+                    child_matches = True
+
+            # Show/hide based on match
+            should_show = matches or child_matches
+            # Note: Tree widget doesn't have direct hide/show, we use expand/collapse
+            if should_show and query and matches:
+                node.expand()
+            elif not query:
+                node.collapse()
+
+            return should_show
+
+        # Start filtering from root children
+        for child in tree.root.children:
+            filter_node(child)
 
     # ── Actions ──────────────────────────────────────────────────────────────
 
     def action_refresh(self) -> None:
-        table = self.query_one("#chapter-table", DataTable)
-        table.clear()
         self._load_data()
+
+    def action_focus_search(self) -> None:
+        self.query_one("#search-input", Input).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "search-input":
+            self._apply_search()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "search-input":
+            self._apply_search()
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        """Handle selection of a chapter node."""
+        node_id = str(event.node.id)
+        if node_id in self._chapter_map:
+            self._selected_volume, self._selected_chapter = self._chapter_map[node_id]
+            self.action_translate_selected()
 
     def action_translate_selected(self) -> None:
         """Show options modal then push TranslationScreen."""
-        table = self.query_one("#chapter-table", DataTable)
-        cursor_row = table.cursor_row
-        if cursor_row < 0 or cursor_row >= len(self._row_chapters):
+        # Get selected node from tree
+        tree = self.query_one("#chapter-tree", Tree)
+        if not tree.cursor_node:
+            self.notify("Выберите главу для перевода", severity="warning")
             return
 
-        vol_name, chapter_name = self._row_chapters[cursor_row]
+        node_id = str(tree.cursor_node.id)
+        if node_id not in self._chapter_map:
+            self.notify("Выберите главу (а не том)", severity="warning")
+            return
+
+        vol_name, chapter_name = self._chapter_map[node_id]
         if not chapter_name:
             self.notify("Выберите главу для перевода", severity="warning")
             return
@@ -193,6 +247,55 @@ class DashboardScreen(Screen):
             if options is None:
                 return  # user cancelled
             self.app.push_screen(TranslationScreen(series_root, chapter_path, options))
+
+        self.app.push_screen(TranslationOptionsModal(), _on_options)
+
+    def action_translate_all(self) -> None:
+        """Translate all pending chapters across all volumes."""
+        from book_translator.textual_app.screens.translation import TranslationScreen
+        from book_translator.textual_app.screens.translation_options import TranslationOptionsModal
+
+        series_root: Path = self.app.series_root  # type: ignore[attr-defined]
+
+        # Collect all pending chapters
+        pending_chapters: list[tuple[Path, Path]] = []  # (chapter_path, series_root)
+
+        volume_dirs = sorted(
+            d for d in series_root.iterdir()
+            if d.is_dir() and (d / "source").is_dir()
+        )
+
+        for vol_dir in volume_dirs:
+            source_dir = vol_dir / "source"
+            chunks_db = vol_dir / ".state" / "chunks.db"
+
+            for src_file in sorted(source_dir.glob("*.txt")):
+                chapter_name = src_file.stem
+                # Check if chapter needs translation
+                needs_translation = True
+                if chunks_db.exists():
+                    try:
+                        db.init_chunks_db(chunks_db)
+                        stage = db.get_chapter_stage(chunks_db, chapter_name)
+                        if stage == "complete":
+                            needs_translation = False
+                    except Exception:
+                        pass
+                if needs_translation:
+                    pending_chapters.append((src_file, series_root))
+
+        if not pending_chapters:
+            self.notify("Нет глав для перевода (все уже завершены)", severity="information")
+            return
+
+        def _on_options(options: dict | None) -> None:
+            if options is None:
+                return  # user cancelled
+
+            # Create a batch translation screen that processes all chapters
+            self.app.push_screen(
+                BatchTranslationScreen(pending_chapters, options)
+            )
 
         self.app.push_screen(TranslationOptionsModal(), _on_options)
 
@@ -222,24 +325,19 @@ class DashboardScreen(Screen):
 
     def action_switch_to_logs(self) -> None:
         from book_translator.textual_app.screens.logs import LogScreen
-        table = self.query_one("#chapter-table", DataTable)
-        cursor_row = table.cursor_row
+        tree = self.query_one("#chapter-tree", Tree)
         volume_name = None
         chapter_name = None
-        if 0 <= cursor_row < len(self._row_chapters):
-            volume_name, chapter_name = self._row_chapters[cursor_row]
-            if not chapter_name:
-                chapter_name = None
+        if tree.cursor_node:
+            node_id = str(tree.cursor_node.id)
+            if node_id in self._chapter_map:
+                volume_name, chapter_name = self._chapter_map[node_id]
         self.app.push_screen(LogScreen(volume_name=volume_name, chapter_name=chapter_name))
 
     def action_quit(self) -> None:
         self.app.exit()
 
     # ── Event handlers ────────────────────────────────────────────────────────
-
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Enter on a row → translate that chapter."""
-        self.action_translate_selected()
 
     def on_dashboard_refresh_requested(
         self, _: DashboardRefreshRequested
