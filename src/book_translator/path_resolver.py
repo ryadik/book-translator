@@ -149,26 +149,38 @@ def ensure_volume_dirs(volume_paths: VolumePaths) -> None:
     volume_paths.cache_dir.mkdir(parents=True, exist_ok=True)
 
 
-def resolve_prompt(series_root: Path, prompt_name: str, bundled_prompts: dict[str, str]) -> str:
-    """Resolve a prompt: series override → bundled default.
+def resolve_prompt(
+    series_root: Path,
+    prompt_name: str,
+    bundled_prompts: dict[str, str],
+    backend: str = "gemini",
+    local_prompts: dict[str, str] | None = None,
+) -> str:
+    """Resolve a prompt using priority: series override → backend default → cloud default.
 
-    Checks {series_root}/prompts/{prompt_name}.txt first.
-    Falls back to bundled_prompts dict.
+    Resolution order:
+    1. {series_root}/prompts/{prompt_name}.txt  — user override (applies to all backends)
+    2. local_prompts[prompt_name]               — bundled local prompt (when backend='ollama')
+    3. bundled_prompts[prompt_name]             — bundled cloud prompt (fallback)
 
     Args:
         series_root: Path to series root
         prompt_name: Prompt name without extension (e.g. 'translation')
-        bundled_prompts: Dict mapping prompt names to default content strings
+        bundled_prompts: Dict mapping prompt names to cloud prompt strings
+        backend: Active backend ('gemini' or 'ollama')
+        local_prompts: Dict mapping prompt names to local prompt strings (optional)
 
     Returns:
         Prompt content string
 
     Raises:
-        FileNotFoundError: if prompt not found in either location
+        FileNotFoundError: if prompt not found in any location
     """
     override_path = series_root / 'prompts' / f'{prompt_name}.txt'
     if override_path.is_file():
         return override_path.read_text(encoding='utf-8')
+    if backend == "ollama" and local_prompts and prompt_name in local_prompts:
+        return local_prompts[prompt_name]
     if prompt_name in bundled_prompts:
         return bundled_prompts[prompt_name]
     raise FileNotFoundError(

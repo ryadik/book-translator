@@ -8,15 +8,18 @@ _logger = logging.getLogger(__name__)
 from book_translator.discovery import MARKER_FILE
 from book_translator.db import init_glossary_db
 
-TOML_TEMPLATE = '''[series]
+TOML_TEMPLATE_GEMINI = '''[series]
 name = "{name}"
 source_lang = "{source_lang}"
 target_lang = "{target_lang}"
 
+# LLM backend: "gemini" (cloud) or "ollama" (local)
+[llm]
+backend = "gemini"
+
+# Gemini model configuration
 [gemini_cli]
 model = "gemini-2.5-pro"
-worker_timeout_seconds = 120
-proofreading_timeout_seconds = 300
 
 [retry]
 max_attempts = 3
@@ -32,6 +35,55 @@ min_chunk_size = 300
 max_concurrent = 50
 max_rps = 2.0
 '''
+
+TOML_TEMPLATE_OLLAMA = '''[series]
+name = "{name}"
+source_lang = "{source_lang}"
+target_lang = "{target_lang}"
+
+# LLM backend: "ollama" (local inference via Ollama server)
+[llm]
+backend = "ollama"
+ollama_url = "http://localhost:11434"
+
+# Model for each pipeline stage — swap for other Ollama models as needed
+[llm.models]
+discovery = "qwen3:8b"             # fast model for term extraction
+translation = "qwen3:30b-a3b"     # quality model for literary translation
+proofreading = "qwen3:30b-a3b"    # quality model for per-chunk polish
+global_proofreading = "qwen3:14b" # model for chapter-wide consistency pass
+
+# Generation options (applied to all stages unless overridden below)
+[llm.options]
+temperature = 0.3
+num_ctx = 8192  # context window; increase if prompts + glossary + text exceed this
+think = false   # Qwen3 extended thinking; false = faster, no hidden reasoning tokens
+
+# Per-stage temperature overrides
+[llm.options.stage_temperature]
+discovery = 0.1          # low temp for deterministic JSON extraction
+translation = 0.4        # higher temp for creative literary output
+proofreading = 0.3       # moderate temp for stylistic refinement
+global_proofreading = 0.1 # low temp for consistent JSON diffs
+
+[retry]
+max_attempts = 3
+wait_min_seconds = 4
+wait_max_seconds = 10
+
+[splitter]
+target_chunk_size = 600
+max_part_chars = 800
+min_chunk_size = 300
+
+# Ollama: low concurrency (local hardware), no external API rate limit
+[workers]
+max_concurrent = 3
+max_rps = 100.0
+'''
+
+# Keep the old name as alias for backward compat
+TOML_TEMPLATE = TOML_TEMPLATE_GEMINI
 
 WORLD_INFO_TEMPLATE = '''# Информация о мире
 
@@ -95,7 +147,9 @@ def run_init(args, info_callback=None, success_callback=None, error_callback=Non
     series_dir.mkdir()
     
     # Write marker file (book-translator.toml)
-    toml_content = TOML_TEMPLATE.format(
+    backend = getattr(args, 'backend', 'gemini')
+    template = TOML_TEMPLATE_OLLAMA if backend == 'ollama' else TOML_TEMPLATE_GEMINI
+    toml_content = template.format(
         name=args.name,
         source_lang=args.source_lang,
         target_lang=args.target_lang
@@ -121,7 +175,14 @@ def run_init(args, info_callback=None, success_callback=None, error_callback=Non
     (vol1 / 'source').mkdir(parents=True)
     (vol1 / 'output').mkdir()
     
-    success(f"✅ Серия '{args.name}' создана успешно!")
+    success(f"✅ Серия '{args.name}' создана успешно! (backend: {backend})")
+    ollama_hint = (
+        "\n  ⚠️  Ollama-шаги перед запуском:"
+        "\n    1. Установите Ollama: https://ollama.com"
+        "\n    2. ollama pull qwen3:8b"
+        "\n    3. ollama pull qwen3:30b-a3b"
+        "\n    4. ollama pull qwen3:14b"
+    ) if backend == 'ollama' else ""
     info(f"""
 Структура:
   {args.name}/
@@ -133,9 +194,9 @@ def run_init(args, info_callback=None, success_callback=None, error_callback=Non
   └── volume-01/
       ├── source/             ← положите исходные .txt файлы сюда
       └── output/             ← переведённые файлы появятся здесь
-
+{ollama_hint}
 Следующий шаг:
   1. Заполните world_info.md и style_guide.md
   2. Положите исходный текст в volume-01/source/
-  3. cd {args.name} && book-translator translate volume-01/source/chapter.txt
+  3. cd {args.name} && book-translator
 """)

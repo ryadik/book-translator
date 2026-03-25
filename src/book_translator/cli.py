@@ -13,6 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument('name', type=str, help='Название серии')
     init_parser.add_argument('--source-lang', default='ja', help='Исходный язык (ISO 639-1)')
     init_parser.add_argument('--target-lang', default='ru', help='Целевой язык (ISO 639-1)')
+    init_parser.add_argument('--backend', choices=['gemini', 'ollama'], default='gemini', help='LLM-бэкенд: gemini (облако) или ollama (локально)')
 
     # --- translate ---
     tr_parser = subparsers.add_parser('translate', help='Перевести главу или директорию')
