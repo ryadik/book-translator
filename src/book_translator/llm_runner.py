@@ -1,19 +1,61 @@
 """
-LLM runner — thin wrapper around gemini-cli subprocess.
+LLM runner — thin wrappers around LLM backends.
 
-Provides run_gemini() which handles subprocess execution, retry logic,
-rate limiting, and input/output logging.
+Provides:
+  run_gemini() — subprocess call to gemini-cli (cloud backend)
+  run_ollama() — HTTP call to local Ollama server (local backend)
+  run_llm()    — dispatcher that routes to the correct backend
+  check_ollama_connection() — pre-flight check for Ollama availability
+  cancel_all() — abort all active LLM calls (called from UI cancel handler)
+  reset_cancellation() — clear cancellation state before a new translation run
 """
+import re as _re
 import subprocess
+import threading as _threading
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
 
+import requests as _requests
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from book_translator.logger import system_logger, input_logger, output_logger
 from book_translator.rate_limiter import RateLimiter
 from book_translator.utils import find_tool_versions_dir
+
+
+class _LLMCancelledError(Exception):
+    """Raised internally to abort a cancelled LLM call without retrying."""
+
+
+# ── Module-level cancellation state ──────────────────────────────────────────
+# Shared across all threads; cancel_all() sets _cancelled and kills active calls.
+_cancelled = _threading.Event()
+_registry_lock = _threading.Lock()
+_active_processes: list[subprocess.Popen] = []   # active gemini-cli subprocesses
+
+
+def cancel_all() -> None:
+    """Abort all active LLM calls. Thread-safe; called from the UI cancel handler.
+
+    Gemini subprocesses are killed immediately (SIGKILL).
+    Ollama HTTP requests: cancel_all() sets _cancelled so any retry loop stops
+    immediately before starting the next attempt. In-flight HTTP requests are not
+    interrupted mid-flight (standard requests library limitation), but no new
+    requests will start after cancellation.
+    """
+    _cancelled.set()
+    with _registry_lock:
+        for proc in list(_active_processes):
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        _active_processes.clear()
+
+
+def reset_cancellation() -> None:
+    """Clear cancellation state before starting a new translation run."""
+    _cancelled.clear()
 
 
 @lru_cache(maxsize=1)
@@ -67,29 +109,241 @@ def run_gemini(
         reraise=True,
     )
     def _execute() -> str:
+        # Check cancellation before starting — _LLMCancelledError is NOT in the
+        # retry list so tenacity lets it propagate immediately.
+        if _cancelled.is_set():
+            raise _LLMCancelledError("LLM call cancelled")
         system_logger.info(f"[LLMRunner] Запущен воркер [id: {worker_id}] для: {label}")
         try:
             with rate_limiter:
-                result = subprocess.run(
+                proc = subprocess.Popen(
                     command,
-                    input=prompt,
+                    stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
                     encoding='utf-8',
-                    timeout=timeout,
-                    check=True,
                     cwd=_get_subprocess_cwd(),
                 )
-            return result.stdout
-        except subprocess.CalledProcessError as e:
-            system_logger.error(f"[LLMRunner] Воркер [id: {worker_id}] для {label} завершился с ошибкой (код: {e.returncode}).")
-            output_logger.error(f"[{worker_id}] --- FAILED OUTPUT FROM: {label} ---\n{e.stderr.strip()}\n")
+            with _registry_lock:
+                _active_processes.append(proc)
+            try:
+                try:
+                    stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.communicate()
+                    system_logger.error(f"[LLMRunner] Воркер [id: {worker_id}] превысил лимит времени ({timeout}с). Принудительное завершение.")
+                    raise
+                if proc.returncode != 0:
+                    exc = subprocess.CalledProcessError(proc.returncode, command, stdout, stderr)
+                    system_logger.error(f"[LLMRunner] Воркер [id: {worker_id}] для {label} завершился с ошибкой (код: {proc.returncode}).")
+                    output_logger.error(f"[{worker_id}] --- FAILED OUTPUT FROM: {label} ---\n{stderr.strip()}\n")
+                    raise exc
+                return stdout
+            finally:
+                with _registry_lock:
+                    try:
+                        _active_processes.remove(proc)
+                    except ValueError:
+                        pass
+        except subprocess.CalledProcessError:
             raise
         except subprocess.TimeoutExpired:
-            system_logger.error(f"[LLMRunner] Воркер [id: {worker_id}] превысил лимит времени ({timeout}с). Принудительное завершение.")
             raise
 
     stdout = _execute()
     output_logger.info(f"[{worker_id}] --- SUCCESSFUL OUTPUT FROM: {label} ---\n{stdout}\n")
     return stdout
+
+
+def run_ollama(
+    prompt: str,
+    model_name: str,
+    output_format: str,
+    rate_limiter: RateLimiter,
+    timeout: int,
+    retry_attempts: int,
+    retry_wait_min: int,
+    retry_wait_max: int,
+    worker_id: str,
+    label: str,
+    ollama_url: str = "http://localhost:11434",
+    ollama_options: dict | None = None,
+) -> str:
+    """Run a prompt against a local Ollama server and return the response text.
+
+    Uses the /api/generate endpoint with stream=False.
+    When output_format='json', passes format='json' to Ollama for grammar-constrained output.
+
+    Args:
+        prompt: The full prompt string to send.
+        model_name: Ollama model name (e.g. 'qwen3:14b').
+        output_format: 'text' or 'json'.
+        rate_limiter: Shared rate limiter instance.
+        timeout: HTTP request timeout in seconds.
+        retry_attempts: Max retry attempts on transient errors.
+        retry_wait_min: Min wait between retries (seconds).
+        retry_wait_max: Max wait between retries (seconds).
+        worker_id: Short ID for logging.
+        label: Human-readable label for log messages (e.g. 'chunk_3').
+        ollama_url: Base URL of the Ollama server.
+        ollama_options: Optional generation parameters (temperature, num_ctx, etc.).
+
+    Returns:
+        Response text from Ollama.
+
+    Raises:
+        requests.exceptions.ConnectionError: If Ollama is not reachable (after retries).
+        requests.exceptions.HTTPError: On non-retryable HTTP errors.
+        requests.exceptions.Timeout: After exhausting retries.
+    """
+    if _cancelled.is_set():
+        raise _LLMCancelledError("LLM call cancelled")
+
+    input_logger.info(f"[{worker_id}] --- PROMPT FOR: {label} ---\n{prompt}\n")
+
+    endpoint = f"{ollama_url.rstrip('/')}/api/generate"
+
+    # Separate top-level Ollama params from model generation options.
+    # 'think' is a top-level Ollama param (not inside 'options') controlling
+    # Qwen3 chain-of-thought mode. 'stage_temperature' is our internal key
+    # already resolved before this call — strip it defensively.
+    raw_options = dict(ollama_options or {})
+    raw_options.pop('stage_temperature', None)
+    think_value = raw_options.pop('think', None)
+
+    payload: dict = {
+        "model": model_name,
+        "prompt": prompt,
+        "stream": False,
+        "options": raw_options,
+    }
+    if think_value is not None:
+        payload["think"] = bool(think_value)
+    if output_format == "json":
+        payload["format"] = "json"
+
+    @retry(
+        stop=stop_after_attempt(retry_attempts),
+        wait=wait_exponential(multiplier=1, min=retry_wait_min, max=retry_wait_max),
+        retry=retry_if_exception_type((
+            _requests.exceptions.Timeout,
+            _requests.exceptions.ConnectionError,
+        )),
+        reraise=True,
+    )
+    def _execute() -> str:
+        # Check cancellation before each attempt — _LLMCancelledError is NOT in
+        # the retry list so tenacity lets it propagate immediately without retrying.
+        if _cancelled.is_set():
+            raise _LLMCancelledError("LLM call cancelled")
+        system_logger.info(f"[LLMRunner/Ollama] Запущен воркер [id: {worker_id}] для: {label} (модель: {model_name})")
+        try:
+            with rate_limiter:
+                response = _requests.post(endpoint, json=payload, timeout=timeout)
+            response.raise_for_status()
+            text = response.json()["response"]
+            # Strip <think>...</think> blocks — Qwen3 may emit these even when
+            # think=false is sent. Defense-in-depth: remove them from output.
+            text = _re.sub(r'<think>.*?</think>', '', text, flags=_re.DOTALL).strip()
+            return text
+        except _requests.exceptions.Timeout:
+            system_logger.error(f"[LLMRunner/Ollama] Воркер [id: {worker_id}] превысил лимит времени ({timeout}с).")
+            raise
+        except _requests.exceptions.ConnectionError as e:
+            system_logger.error(f"[LLMRunner/Ollama] Воркер [id: {worker_id}] не может подключиться к Ollama: {e}")
+            raise
+        except _requests.exceptions.HTTPError as e:
+            system_logger.error(f"[LLMRunner/Ollama] Воркер [id: {worker_id}] для {label} HTTP-ошибка: {e}")
+            output_logger.error(f"[{worker_id}] --- FAILED OUTPUT FROM: {label} ---\n{e.response.text[:500]}\n")
+            raise
+
+    stdout = _execute()
+    output_logger.info(f"[{worker_id}] --- SUCCESSFUL OUTPUT FROM: {label} ---\n{stdout}\n")
+    return stdout
+
+
+def run_llm(
+    backend: str,
+    prompt: str,
+    model_name: str,
+    output_format: str,
+    rate_limiter: RateLimiter,
+    timeout: int,
+    retry_attempts: int,
+    retry_wait_min: int,
+    retry_wait_max: int,
+    worker_id: str,
+    label: str,
+    ollama_url: str = "http://localhost:11434",
+    ollama_options: dict | None = None,
+) -> str:
+    """Dispatch an LLM call to the configured backend.
+
+    Args:
+        backend: 'gemini' or 'ollama'.
+        All other args passed through to the backend-specific runner.
+
+    Returns:
+        Response text from the selected backend.
+    """
+    if backend == "ollama":
+        return run_ollama(
+            prompt=prompt,
+            model_name=model_name,
+            output_format=output_format,
+            rate_limiter=rate_limiter,
+            timeout=timeout,
+            retry_attempts=retry_attempts,
+            retry_wait_min=retry_wait_min,
+            retry_wait_max=retry_wait_max,
+            worker_id=worker_id,
+            label=label,
+            ollama_url=ollama_url,
+            ollama_options=ollama_options,
+        )
+    return run_gemini(
+        prompt=prompt,
+        model_name=model_name,
+        output_format=output_format,
+        rate_limiter=rate_limiter,
+        timeout=timeout,
+        retry_attempts=retry_attempts,
+        retry_wait_min=retry_wait_min,
+        retry_wait_max=retry_wait_max,
+        worker_id=worker_id,
+        label=label,
+    )
+
+
+def check_ollama_connection(ollama_url: str, required_models: list[str]) -> None:
+    """Verify that Ollama is running and the required models are available.
+
+    Args:
+        ollama_url: Base URL of the Ollama server.
+        required_models: List of model names that must be present (e.g. ['qwen3:8b']).
+
+    Raises:
+        RuntimeError: If Ollama is unreachable or required models are missing.
+    """
+    tags_url = f"{ollama_url.rstrip('/')}/api/tags"
+    try:
+        response = _requests.get(tags_url, timeout=5)
+        response.raise_for_status()
+    except _requests.exceptions.ConnectionError:
+        raise RuntimeError(
+            f"Ollama не запущен (не удалось подключиться к {ollama_url}). "
+            "Запустите сервер командой: ollama serve"
+        )
+    except Exception as e:
+        raise RuntimeError(f"Ошибка при подключении к Ollama ({ollama_url}): {e}")
+
+    available = {m["name"] for m in response.json().get("models", [])}
+    missing = [m for m in required_models if m not in available]
+    if missing:
+        pull_cmds = "\n".join(f"  ollama pull {m}" for m in missing)
+        raise RuntimeError(
+            f"Следующие модели не найдены в Ollama:\n{pull_cmds}\n"
+            "Загрузите их перед запуском перевода."
+        )

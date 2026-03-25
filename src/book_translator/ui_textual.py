@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from book_translator.textual_app.app import BookTranslatorApp
 
+from book_translator import llm_runner as _llm_runner
 from book_translator.textual_app.messages import (
     ConfirmRequest,
     ProgressAdvanced,
@@ -72,9 +73,10 @@ class TextualBridge:
         return self._running and not self._cancelled.is_set()
 
     def cancel(self) -> None:
-        """Сигнализирует об отмене. Разблокирует все ожидающие операции."""
+        """Сигнализирует об отмене. Убивает активные LLM-вызовы и разблокирует ожидающие операции."""
         self._cancelled.set()
         self._running = False
+        _llm_runner.cancel_all()
 
     def mark_done(self) -> None:
         """Отмечает завершение перевода (без отмены)."""

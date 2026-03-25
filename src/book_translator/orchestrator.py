@@ -53,6 +53,15 @@ class _NullInteractions:
         return 0
 
 
+def _stage_options(base_options: dict, stage_name: str) -> dict:
+    """Build stage-specific Ollama options, applying per-stage temperature override."""
+    opts = dict(base_options)
+    stage_temps = opts.pop('stage_temperature', {})
+    if stage_name in stage_temps:
+        opts['temperature'] = stage_temps[stage_name]
+    return opts
+
+
 def _safe_chapter_name(chapter_name: str) -> str:
     return chapter_name.replace('/', '_').replace('\\', '_')
 
@@ -152,6 +161,9 @@ class WorkerConfig:
     retry_attempts: int = 3
     retry_wait_min: int = 4
     retry_wait_max: int = 10
+    backend: str = "gemini"
+    ollama_url: str = "http://localhost:11434"
+    ollama_options: dict = field(default_factory=dict)
 
 
 def _run_single_worker(
@@ -178,7 +190,8 @@ def _run_single_worker(
                         .replace('{target_lang_name}', config.target_lang_name)
                         .replace('{source_lang_name}', config.source_lang_name))
 
-        stdout_output = llm_runner.run_gemini(
+        stdout_output = llm_runner.run_llm(
+            backend=config.backend,
             prompt=final_prompt,
             model_name=config.model_name,
             output_format=config.output_format,
@@ -189,6 +202,8 @@ def _run_single_worker(
             retry_wait_max=config.retry_wait_max,
             worker_id=worker_id,
             label=f"chunk_{chunk_index}",
+            ollama_url=config.ollama_url,
+            ollama_options=config.ollama_options,
         )
 
         if not stdout_output or not stdout_output.strip():
@@ -240,7 +255,10 @@ def _run_global_proofreading(
     progress_handle=None,
     glossary_str: str = "",
     style_guide_str: str = "",
-    target_lang_name: str = "Russian"
+    target_lang_name: str = "Russian",
+    backend: str = "gemini",
+    ollama_url: str = "http://localhost:11434",
+    ollama_options: dict | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     system_logger.info("[Orchestrator] Запуск глобальной вычитки...")
 
@@ -257,7 +275,8 @@ def _run_global_proofreading(
                     + "\n\n" + chunks_text)
 
     try:
-        stdout = llm_runner.run_gemini(
+        stdout = llm_runner.run_llm(
+            backend=backend,
             prompt=final_prompt,
             model_name=model_name,
             output_format='json',
@@ -268,6 +287,8 @@ def _run_global_proofreading(
             retry_wait_max=retry_wait_max,
             worker_id='global',
             label='global_proofreading',
+            ollama_url=ollama_url,
+            ollama_options=ollama_options,
         )
 
         diffs = parse_llm_json(stdout.strip())
@@ -369,16 +390,36 @@ def run_translation_process(
     final_error: str | None = None
     if ui is None:
         ui = _NullInteractions()
+    # Reset any leftover cancellation state from a previous run before starting.
+    llm_runner.reset_cancellation()
     cfg = discovery.load_series_config(series_root)
     max_workers = cfg.get('workers', {}).get('max_concurrent', 50)
-    model_name = cfg.get('gemini_cli', {}).get('model', 'gemini-2.5-pro')
-    worker_timeout = cfg.get('gemini_cli', {}).get('worker_timeout_seconds', 120)
-    proofreading_timeout = cfg.get('gemini_cli', {}).get('proofreading_timeout_seconds', 300)
+    worker_timeout = cfg.get('llm', {}).get('worker_timeout_seconds', 120)
+    proofreading_timeout = cfg.get('llm', {}).get('proofreading_timeout_seconds', 300)
     retry_attempts = cfg.get('retry', {}).get('max_attempts', 3)
     retry_wait_min = cfg.get('retry', {}).get('wait_min_seconds', 4)
     retry_wait_max = cfg.get('retry', {}).get('wait_max_seconds', 10)
     source_lang = cfg.get('series', {}).get('source_lang', 'ja')
     target_lang = cfg.get('series', {}).get('target_lang', 'ru')
+
+    # LLM backend config
+    llm_cfg = cfg.get('llm', {})
+    backend = llm_cfg.get('backend', 'gemini')
+    ollama_url = llm_cfg.get('ollama_url', 'http://localhost:11434')
+    ollama_options = llm_cfg.get('options', {})
+    stage_models = llm_cfg.get('models', {})
+
+    if backend == 'ollama':
+        discovery_model = stage_models.get('discovery', 'qwen3:8b')
+        translation_model = stage_models.get('translation', 'qwen3:30b-a3b')
+        proofreading_model = stage_models.get('proofreading', 'qwen3:30b-a3b')
+        global_proofreading_model = stage_models.get('global_proofreading', 'qwen3:14b')
+    else:
+        gemini_model = cfg.get('gemini_cli', {}).get('model', 'gemini-2.5-pro')
+        discovery_model = gemini_model
+        translation_model = gemini_model
+        proofreading_model = gemini_model
+        global_proofreading_model = gemini_model
     typography_rules = get_typography_rules(target_lang)
     target_lang_name = get_language_name(target_lang)
     source_lang_name = get_language_name(source_lang)
@@ -418,20 +459,20 @@ def run_translation_process(
         db.clear_chapter(chunks_db, chapter_name)
         _cleanup_chapter_artifacts(volume_paths, chapter_name)
 
-    # Load prompts
-    term_prompt_template = path_resolver.resolve_prompt(series_root, 'term_discovery', default_prompts.PROMPTS)
-    translation_prompt_template = path_resolver.resolve_prompt(series_root, 'translation', default_prompts.PROMPTS)
-    proofreading_prompt_template = path_resolver.resolve_prompt(series_root, 'proofreading', default_prompts.PROMPTS)
-    global_proofreading_prompt_template = path_resolver.resolve_prompt(series_root, 'global_proofreading', default_prompts.PROMPTS)
+    # Load prompts (backend-aware: ollama uses simplified prompts unless user overrides)
+    term_prompt_template = path_resolver.resolve_prompt(series_root, 'term_discovery', default_prompts.PROMPTS, backend, default_prompts.LOCAL_PROMPTS)
+    translation_prompt_template = path_resolver.resolve_prompt(series_root, 'translation', default_prompts.PROMPTS, backend, default_prompts.LOCAL_PROMPTS)
+    proofreading_prompt_template = path_resolver.resolve_prompt(series_root, 'proofreading', default_prompts.PROMPTS, backend, default_prompts.LOCAL_PROMPTS)
+    global_proofreading_prompt_template = path_resolver.resolve_prompt(series_root, 'global_proofreading', default_prompts.PROMPTS, backend, default_prompts.LOCAL_PROMPTS)
 
     # Load context files
     style_guide_content = series_paths.style_guide.read_text(encoding='utf-8') if series_paths.style_guide else ''
     world_info_content = series_paths.world_info.read_text(encoding='utf-8') if series_paths.world_info else ''
 
-    # Base worker configuration (glossary_str set per stage below)
+    # Base worker configuration (glossary_str and model_name set per stage below)
     base_config = WorkerConfig(
         volume_paths=volume_paths,
-        model_name=model_name,
+        model_name=translation_model,  # default; overridden per stage via dc_replace
         chunks_db=chunks_db,
         chapter_name=chapter_name,
         rate_limiter=rate_limiter,
@@ -444,7 +485,15 @@ def run_translation_process(
         retry_attempts=retry_attempts,
         retry_wait_min=retry_wait_min,
         retry_wait_max=retry_wait_max,
+        backend=backend,
+        ollama_url=ollama_url,
+        ollama_options=ollama_options,
     )
+
+    # Validate Ollama connectivity before starting the pipeline
+    if backend == 'ollama':
+        required = list({discovery_model, translation_model, proofreading_model, global_proofreading_model})
+        llm_runner.check_ollama_connection(ollama_url, required)
 
     # Handle restart_stage: reset pipeline to the requested stage
     if restart_stage and restart_stage in _STAGE_PENDING_STATUS:
@@ -458,7 +507,9 @@ def run_translation_process(
         stage = db.get_chapter_stage(chunks_db, chapter_name) or 'не начат'
         system_logger.info(
             f"[Dry-run] Глава: {chapter_name}\n"
-            f"  Модель: {model_name}\n"
+            f"  Бэкенд: {backend}\n"
+            f"  Модели: discovery={discovery_model}, translation={translation_model}, "
+            f"proofreading={proofreading_model}, global={global_proofreading_model}\n"
             f"  Воркеров: {max_workers}\n"
             f"  Таймаут воркера: {worker_timeout}с\n"
             f"  Таймаут вычитки: {proofreading_timeout}с\n"
@@ -520,7 +571,7 @@ def run_translation_process(
 
             pending_chunks = [c for c in db.get_chunks(chunks_db, chapter_name) if c['status'] == 'discovery_pending']
             if pending_chunks:
-                discovery_config = dc_replace(base_config, output_format="json", glossary_str=glossary_content)
+                discovery_config = dc_replace(base_config, output_format="json", glossary_str=glossary_content, model_name=discovery_model, ollama_options=_stage_options(ollama_options, 'discovery'))
                 success = _run_workers_pooled(
                     max_workers, pending_chunks, term_prompt_template, "discovery",
                     discovery_config, ui=ui,
@@ -575,7 +626,7 @@ def run_translation_process(
                     contexts[chunk['chunk_index']] = all_chunks[i-1]['content_source']
 
             if pending_chunks:
-                translation_config = dc_replace(base_config, glossary_str=glossary_content)
+                translation_config = dc_replace(base_config, glossary_str=glossary_content, model_name=translation_model, ollama_options=_stage_options(ollama_options, 'translation'))
                 success = _run_workers_pooled(
                     max_workers, pending_chunks, translation_prompt_template, "translation",
                     translation_config, contexts=contexts, ui=ui,
@@ -617,7 +668,7 @@ def run_translation_process(
                     contexts[chunk['chunk_index']] = all_chunks[i-1]['content_target'] or ""
 
             if pending_chunks:
-                proofreading_config = dc_replace(base_config, glossary_str=glossary_content)
+                proofreading_config = dc_replace(base_config, glossary_str=glossary_content, model_name=proofreading_model, ollama_options=_stage_options(ollama_options, 'proofreading'))
                 success = _run_workers_pooled(
                     max_workers, pending_chunks, proofreading_prompt_template, "reading",
                     proofreading_config, contexts=contexts, ui=ui,
@@ -655,7 +706,7 @@ def run_translation_process(
                 updated_chunks, global_success = _run_global_proofreading(
                     all_chunks,
                     global_proofreading_prompt_template,
-                    model_name,
+                    global_proofreading_model,
                     rate_limiter,
                     proofreading_timeout,
                     retry_attempts,
@@ -664,7 +715,10 @@ def run_translation_process(
                     progress_handle=handle,
                     glossary_str=glossary_content,
                     style_guide_str=style_guide_content,
-                    target_lang_name=target_lang_name
+                    target_lang_name=target_lang_name,
+                    backend=backend,
+                    ollama_url=ollama_url,
+                    ollama_options=_stage_options(ollama_options, 'global_proofreading'),
                 )
 
             if not global_success:

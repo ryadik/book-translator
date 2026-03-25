@@ -15,6 +15,7 @@ dependencies = [
     "python-docx>=1.1.0",
     "ebooklib>=0.18",
     "textual>=1.0.0",
+    "requests>=2.28.0",
 ]
 
 [project.optional-dependencies]
@@ -30,7 +31,7 @@ book-translator = "book_translator.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-book_translator = ["data/style_guides/*.md", "data/prompts/*.txt"]
+book_translator = ["data/style_guides/*.md", "data/prompts/*.txt", "data/prompts/local/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
