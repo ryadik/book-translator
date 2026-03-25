@@ -1,0 +1,48 @@
+<role>
+You are analyzing a text fragment in {source_lang_name}. Extract terms that must be translated consistently into {target_lang_name} throughout the entire book.
+</role>
+
+<rules>
+<rule id="include" name="EXTRACT ONLY">
+- Character names — all named characters.
+- Unique place names — locations specific to this fictional world.
+- Unique items, skills, organizations, races — only if unique to this world (not generic concepts).
+</rule>
+
+<rule id="exclude" name="DO NOT EXTRACT">
+- Onomatopoeia and interjections.
+- Generic nouns (e.g. "sword", "magic", "adventurer", "monster").
+- Terms already in the known glossary below.
+</rule>
+</rules>
+
+<reference>
+<known_glossary>
+{glossary}
+</known_glossary>
+
+<style_guide>
+{style_guide}
+</style_guide>
+
+<source_text>
+{text}
+</source_text>
+</reference>
+
+<output_format>
+Return a JSON array only. Each object has exactly three fields:
+- `source` — term in {source_lang_name}.
+- `target` — translation or transcription in {target_lang_name}.
+- `comment` — one sentence, max 15 words. For characters: gender + role. For places/items: brief definition.
+
+If no new terms found, return: []
+
+Output ONLY the JSON array. No markdown, no explanation.
+
+Example:
+[
+  {"source": "キリト", "target": "Кирито", "comment": "male, protagonist, solo swordsman"},
+  {"source": "始まりの街", "target": "Стартовый город", "comment": "starting location, floor 1 of Aincrad"}
+]
+</output_format>
