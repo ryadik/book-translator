@@ -52,17 +52,6 @@ def load_series_config(series_root: Path) -> dict:
     # Apply defaults
     config['series'].setdefault('source_lang', 'ja')
     config['series'].setdefault('target_lang', 'ru')
-    
-    # Capture user-specified gemini_cli timeouts BEFORE applying defaults,
-    # so we can propagate explicit values to the unified [llm] timeout fields below.
-    _raw_gemini_worker_timeout = config.get('gemini_cli', {}).get('worker_timeout_seconds')
-    _raw_gemini_proofread_timeout = config.get('gemini_cli', {}).get('proofreading_timeout_seconds')
-
-    if 'gemini_cli' not in config:
-        config['gemini_cli'] = {}
-    config['gemini_cli'].setdefault('model', 'gemini-2.5-pro')
-    config['gemini_cli'].setdefault('worker_timeout_seconds', 120)
-    config['gemini_cli'].setdefault('proofreading_timeout_seconds', 300)
 
     if 'retry' not in config:
         config['retry'] = {}
@@ -88,18 +77,11 @@ def load_series_config(series_root: Path) -> dict:
 
     # Unified timeouts — configurable in [llm] section, backend-aware defaults.
     # Ollama needs much longer timeouts because local inference is slow.
-    # Explicit [gemini_cli] values from old configs are respected as fallback.
     _backend = config['llm']['backend']
     _default_worker_timeout = 600 if _backend == 'ollama' else 120
     _default_proofread_timeout = 900 if _backend == 'ollama' else 300
-    config['llm'].setdefault(
-        'worker_timeout_seconds',
-        _raw_gemini_worker_timeout if _raw_gemini_worker_timeout is not None else _default_worker_timeout,
-    )
-    config['llm'].setdefault(
-        'proofreading_timeout_seconds',
-        _raw_gemini_proofread_timeout if _raw_gemini_proofread_timeout is not None else _default_proofread_timeout,
-    )
+    config['llm'].setdefault('worker_timeout_seconds', _default_worker_timeout)
+    config['llm'].setdefault('proofreading_timeout_seconds', _default_proofread_timeout)
 
     if 'models' not in config['llm']:
         config['llm']['models'] = {}
@@ -175,14 +157,6 @@ def _validate_config(config: dict) -> None:
         raise ValueError(
             f"Invalid 'retry.max_attempts': {max_attempts!r}. Must be an integer between 1 and 10."
         )
-
-    # Validate [gemini_cli] timeouts (backward compat)
-    for key in ('worker_timeout_seconds', 'proofreading_timeout_seconds'):
-        val = config['gemini_cli'].get(key)
-        if not isinstance(val, (int, float)) or val <= 0:
-            raise ValueError(
-                f"Invalid 'gemini_cli.{key}': {val!r}. Must be a positive number."
-            )
 
     # Validate unified [llm] timeouts
     for key in ('worker_timeout_seconds', 'proofreading_timeout_seconds'):

@@ -1,7 +1,7 @@
 import pytest
 import tomllib
 from argparse import Namespace
-from book_translator.commands.init_cmd import run_init
+from book_translator.textual_app.screens.init_screen import run_init
 from book_translator.db import connection
 
 
@@ -11,9 +11,9 @@ def test_init_creates_full_structure(tmp_path, monkeypatch):
     run_init(args)
     series_dir = tmp_path / 'Test Novel'
     assert (series_dir / 'book-translator.toml').is_file()
-    assert (series_dir / 'world_info.md').is_file()
-    assert (series_dir / 'style_guide.md').is_file()
     assert (series_dir / 'prompts').is_dir()
+    assert (series_dir / 'prompts' / 'world_info.md').is_file()
+    assert (series_dir / 'prompts' / 'style_guide.md').is_file()
     assert (series_dir / 'glossary.db').is_file()
     assert (series_dir / 'volume-01' / 'source').is_dir()
     assert (series_dir / 'volume-01' / 'output').is_dir()
@@ -49,14 +49,14 @@ def test_init_glossary_db_initialized(tmp_path, monkeypatch):
 def test_init_world_info_not_empty(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     run_init(Namespace(name='Test', source_lang='ja', target_lang='ru'))
-    content = (tmp_path / 'Test' / 'world_info.md').read_text(encoding='utf-8')
+    content = (tmp_path / 'Test' / 'prompts' / 'world_info.md').read_text(encoding='utf-8')
     assert len(content) > 10  # not empty
 
 
 def test_init_style_guide_not_empty(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     run_init(Namespace(name='Test', source_lang='ja', target_lang='ru'))
-    content = (tmp_path / 'Test' / 'style_guide.md').read_text(encoding='utf-8')
+    content = (tmp_path / 'Test' / 'prompts' / 'style_guide.md').read_text(encoding='utf-8')
     assert len(content) > 10
 
 
@@ -90,9 +90,55 @@ def test_init_series_dir_uses_cwd(tmp_path, monkeypatch):
     assert not (tmp_path / 'MyNovel').exists()
 
 
-def test_init_prompts_dir_is_empty(tmp_path, monkeypatch):
+def test_init_prompts_dir_has_template_files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     run_init(Namespace(name='Test', source_lang='ja', target_lang='ru'))
     prompts_dir = tmp_path / 'Test' / 'prompts'
     assert prompts_dir.is_dir()
-    assert list(prompts_dir.iterdir()) == []
+    # prompts dir now contains world_info.md and style_guide.md
+    assert (prompts_dir / 'world_info.md').is_file()
+    assert (prompts_dir / 'style_guide.md').is_file()
+
+
+def test_init_ollama_backend(tmp_path, monkeypatch):
+    """Test that Ollama backend generates correct config."""
+    monkeypatch.chdir(tmp_path)
+    args = Namespace(name='Test', source_lang='ja', target_lang='ru', backend='ollama')
+    run_init(args)
+    with open(tmp_path / 'Test' / 'book-translator.toml', 'rb') as f:
+        cfg = tomllib.load(f)
+    assert cfg['llm']['backend'] == 'ollama'
+    assert cfg['llm']['ollama_url'] == 'http://localhost:11434'
+    assert cfg['llm']['models']['discovery'] == 'qwen3:8b'
+    assert cfg['workers']['max_concurrent'] == 3
+    assert cfg['workers']['max_rps'] == 100.0
+
+
+def test_init_use_current_dir(tmp_path, monkeypatch):
+    """Test initialization in current directory."""
+    work_dir = tmp_path / 'workspace'
+    work_dir.mkdir()
+    monkeypatch.chdir(work_dir)
+    args = Namespace(
+        name='IgnoredName',
+        source_lang='ja',
+        target_lang='ru',
+        use_current_dir=True
+    )
+    run_init(args)
+    # Files should be created directly in work_dir, not in a subfolder
+    assert (work_dir / 'book-translator.toml').is_file()
+    assert (work_dir / 'prompts' / 'world_info.md').is_file()
+    assert (work_dir / 'prompts' / 'style_guide.md').is_file()
+    assert (work_dir / 'glossary.db').is_file()
+
+
+def test_init_use_current_dir_fails_if_already_initialized(tmp_path, monkeypatch):
+    """Test that initializing in current dir fails if already initialized."""
+    monkeypatch.chdir(tmp_path)
+    # First initialization
+    args = Namespace(name='Test', source_lang='ja', target_lang='ru', use_current_dir=True)
+    run_init(args)
+    # Second initialization should fail
+    with pytest.raises(SystemExit):
+        run_init(args)
