@@ -216,7 +216,7 @@ def _run_single_worker(
                 parse_llm_json(stdout_output)
             except ValueError as e:
                 system_logger.error(f"[Orchestrator] Воркер [id: {worker_id}] для chunk_{chunk_index} вернул невалидный JSON: {e}")
-                db.update_chunk_status(config.chunks_db, config.chapter_name, chunk_index, "discovery_failed")
+                db.update_chunk_status(config.chunks_db, config.chapter_name, chunk_index, f"{step_name}_failed")
                 return False
             safe_chapter = config.chapter_name.replace('/', '_').replace('\\', '_')
             output_path = config.volume_paths.cache_dir / f"{safe_chapter}_chunk_{chunk_index}.json"
