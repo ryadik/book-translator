@@ -1,4 +1,3 @@
-import pytest
 from book_translator.proofreader import apply_diffs
 
 
@@ -34,6 +33,8 @@ def test_apply_diffs_1based_index_not_off_by_one():
     assert updated[0]["content_target"] == "FIXED"
     assert updated[1]["content_target"] == "второй"
     assert updated[2]["content_target"] == "третий"
+    assert applied == 1
+    assert skipped == 0
 
 
 def test_apply_diffs_zero_matches():
@@ -55,6 +56,8 @@ def test_apply_diffs_multiple_matches():
 
     # Should remain unchanged because "Слово" appears twice
     assert updated[0]["content_target"] == "Слово повторяется. Слово снова здесь."
+    assert applied == 0
+    assert skipped == 1
 
 
 def test_apply_diffs_invalid_index():
@@ -67,6 +70,8 @@ def test_apply_diffs_invalid_index():
     updated, applied, skipped = apply_diffs(chunks, diffs)
 
     assert updated[0]["content_target"] == "Это тестовое предложение."
+    assert applied == 0
+    assert skipped == 2
 
 
 def test_apply_diffs_missing_keys():
@@ -80,6 +85,8 @@ def test_apply_diffs_missing_keys():
     updated, applied, skipped = apply_diffs(chunks, diffs)
 
     assert updated[0]["content_target"] == "Это тестовое предложение."
+    assert applied == 0
+    assert skipped == 3
 
 
 def test_apply_diffs_multiple_diffs_same_chunk():
@@ -92,3 +99,5 @@ def test_apply_diffs_multiple_diffs_same_chunk():
     updated, applied, skipped = apply_diffs(chunks, diffs)
 
     assert updated[0]["content_target"] == "Один слово и два слово."
+    assert applied == 2
+    assert skipped == 0
