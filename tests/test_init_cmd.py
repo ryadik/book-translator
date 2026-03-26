@@ -27,6 +27,7 @@ def test_init_toml_is_valid(tmp_path, monkeypatch):
     assert cfg['series']['name'] == 'Test'
     assert cfg['series']['source_lang'] == 'en'
     assert cfg['series']['target_lang'] == 'ru'
+    assert cfg['llm']['backend'] == 'gemini'
     assert cfg['gemini_cli']['model'] == 'gemini-2.5-pro'
     assert cfg['workers']['max_concurrent'] == 50
 
@@ -34,7 +35,7 @@ def test_init_toml_is_valid(tmp_path, monkeypatch):
 def test_init_existing_dir_fails(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / 'Existing').mkdir()
-    with pytest.raises(SystemExit):
+    with pytest.raises(ValueError):
         run_init(Namespace(name='Existing', source_lang='ja', target_lang='ru'))
 
 
@@ -140,5 +141,5 @@ def test_init_use_current_dir_fails_if_already_initialized(tmp_path, monkeypatch
     args = Namespace(name='Test', source_lang='ja', target_lang='ru', use_current_dir=True)
     run_init(args)
     # Second initialization should fail
-    with pytest.raises(SystemExit):
+    with pytest.raises(ValueError):
         run_init(args)

@@ -58,7 +58,9 @@ def test_dashboard_hotkey_opens_logs_screen(tmp_path):
         async with app.run_test() as pilot:
             # First select a chapter in the tree, then press 'l'
             await pilot.press("down")  # Select first volume
+            await pilot.pause()
             await pilot.press("down")  # Select first chapter
+            await pilot.pause()
             await pilot.press("l")
             await pilot.pause()
             assert app.screen.__class__.__name__ == "LogScreen"

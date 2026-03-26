@@ -129,34 +129,20 @@ def _find_bundled_style_guide(source_lang: str, target_lang: str) -> Path | None
     return None
 
 
-def _print_info(message: str) -> None:
-    print(message)
+def run_init(args) -> None:
+    """Initialize a new book series with directory structure and config files.
 
-
-def _print_success(message: str) -> None:
-    print(message)
-
-
-def _raise_error(message: str) -> None:
-    print(message)
-    raise SystemExit(1)
-
-
-def run_init(args, info_callback=None, success_callback=None, error_callback=None):
-    """Initialize a new book series with directory structure and config files."""
-    info = info_callback or _print_info
-    success = success_callback or _print_success
-    error = error_callback or _raise_error
-
+    Raises:
+        ValueError: if initialization cannot proceed (directory exists, already initialized, etc.)
+    """
     # Determine target directory based on mode
     if getattr(args, 'use_current_dir', False):
         series_dir = Path.cwd()
-        # When using current dir, name is used only for config, not for folder
     else:
         series_dir = Path.cwd() / args.name
 
     if series_dir.exists() and not getattr(args, 'use_current_dir', False):
-        error(f"Ошибка: Директория '{args.name}' уже существует.")
+        raise ValueError(f"Директория '{args.name}' уже существует.")
 
     # Create directory structure (only if not using current dir)
     if not getattr(args, 'use_current_dir', False):
@@ -164,7 +150,7 @@ def run_init(args, info_callback=None, success_callback=None, error_callback=Non
 
     # Check if already initialized when using current dir
     if getattr(args, 'use_current_dir', False) and (series_dir / MARKER_FILE).exists():
-        error(f"Ошибка: В текущей директории уже есть '{MARKER_FILE}'.")
+        raise ValueError(f"В текущей директории уже есть '{MARKER_FILE}'.")
 
     # Write marker file (book-translator.toml)
     backend = getattr(args, 'backend', 'gemini')
@@ -193,33 +179,6 @@ def run_init(args, info_callback=None, success_callback=None, error_callback=Non
     vol1 = series_dir / 'volume-01'
     (vol1 / 'source').mkdir(parents=True, exist_ok=True)
     (vol1 / 'output').mkdir(exist_ok=True)
-
-    success(f"✅ Серия '{args.name}' создана успешно! (backend: {backend})")
-    ollama_hint = (
-        "\n  ⚠️  Ollama-шаги перед запуском:"
-        "\n    1. Установите Ollama: https://ollama.com"
-        "\n    2. ollama pull qwen3:8b"
-        "\n    3. ollama pull qwen3:30b-a3b"
-        "\n    4. ollama pull qwen3:14b"
-    ) if backend == 'ollama' else ""
-    info(f"""
-Структура:
-  {series_dir.name}/
-  ├── book-translator.toml   ← настройки серии
-  ├── prompts/               ← промпты, стайлгайд и инфо о мире
-  │   ├── world_info.md      ← контекст мира (заполните!)
-  │   ├── style_guide.md     ← правила стиля
-  │   └── *.txt              ← кастомные промпты (опционально)
-  ├── glossary.db            ← глоссарий серии
-  └── volume-01/
-      ├── source/             ← положите исходные .txt файлы сюда
-      └── output/             ← переведённые файлы появятся здесь
-{ollama_hint}
-Следующий шаг:
-  1. Заполните world_info.md и style_guide.md
-  2. Положите исходный текст в volume-01/source/
-  3. Запустите book-translator
-""")
 
 
 class InitScreen(Screen):
@@ -316,22 +275,10 @@ class InitScreen(Screen):
             use_current_dir=use_current_dir,
         )
 
-        error_holder: list[str] = []
-
-        def _capture_error(msg: str) -> None:
-            error_holder.append(msg)
-            raise SystemExit(1)
-
         try:
-            run_init(
-                args,
-                info_callback=lambda _msg: None,
-                success_callback=lambda _msg: None,
-                error_callback=_capture_error,
-            )
-        except SystemExit:
-            msg = error_holder[0] if error_holder else "Неизвестная ошибка"
-            status_label.update(f"[red]{msg}[/red]")
+            run_init(args)
+        except ValueError as e:
+            status_label.update(f"[red]{e}[/red]")
             return
         except Exception as e:
             status_label.update(f"[red]Ошибка: {e}[/red]")

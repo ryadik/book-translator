@@ -5,7 +5,7 @@ from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Input, Label, Static, Tree
+from textual.widgets import Footer, Header, Input, Static, Tree
 from textual.binding import Binding
 from textual.containers import Vertical
 
@@ -54,7 +54,7 @@ class DashboardScreen(Screen):
         self._chapter_map: dict[str, tuple[str, str]] = {}  # tree node key -> (volume, chapter)
         self._setup_tree()
         self._load_data()
-        self.query_one("#search-input", Input).focus()
+        self.query_one("#chapter-tree", Tree).focus()
 
     def _has_series_config(self) -> bool:
         try:
@@ -145,7 +145,6 @@ class DashboardScreen(Screen):
 
             for src_file in source_files:
                 chapter_name = src_file.stem
-                node_key = f"{vol_dir.name}/{chapter_name}"
 
                 if chapter_name in db_data:
                     info = db_data[chapter_name]
@@ -252,7 +251,6 @@ class DashboardScreen(Screen):
 
     def action_translate_all(self) -> None:
         """Translate all pending chapters across all volumes."""
-        from book_translator.textual_app.screens.translation import TranslationScreen
         from book_translator.textual_app.screens.translation_options import TranslationOptionsModal
 
         series_root: Path = self.app.series_root  # type: ignore[attr-defined]
@@ -344,22 +342,7 @@ class DashboardScreen(Screen):
     ) -> None:
         self.action_refresh()
 
-    def on_key(self, event) -> None:
-        key_actions = {
-            "r": self.action_refresh,
-            "i": self.action_init_series,
-            "g": self.action_switch_to_glossary,
-            "p": self.action_switch_to_prompts,
-            "c": self.action_switch_to_config,
-            "l": self.action_switch_to_logs,
-            "q": self.action_quit,
-        }
-        action = key_actions.get(event.key)
-        if action is not None:
-            event.stop()
-            action()
-
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action == "init_series":
             return not self._has_series_config()
-        return None
+        return True
