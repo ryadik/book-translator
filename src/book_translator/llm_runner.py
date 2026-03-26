@@ -3,13 +3,16 @@ LLM runner — thin wrappers around LLM backends.
 
 Provides:
   run_gemini() — subprocess call to gemini-cli (cloud backend)
+  run_qwen()   — subprocess call to qwen-code CLI (cloud backend)
   run_ollama() — HTTP call to local Ollama server (local backend)
   run_llm()    — dispatcher that routes to the correct backend
+  check_qwen_binary()      — pre-flight check for qwen-code availability
   check_ollama_connection() — pre-flight check for Ollama availability
   cancel_all() — abort all active LLM calls (called from UI cancel handler)
   reset_cancellation() — clear cancellation state before a new translation run
 """
 import re as _re
+import shutil
 import subprocess
 import threading as _threading
 from functools import lru_cache
@@ -31,7 +34,7 @@ class _LLMCancelledError(Exception):
 # Shared across all threads; cancel_all() sets _cancelled and kills active calls.
 _cancelled = _threading.Event()
 _registry_lock = _threading.Lock()
-_active_processes: list[subprocess.Popen] = []   # active gemini-cli subprocesses
+_active_processes: list[subprocess.Popen] = []   # active gemini-cli / qwen-code subprocesses
 
 
 def cancel_all() -> None:
@@ -111,6 +114,101 @@ def run_gemini(
     def _execute() -> str:
         # Check cancellation before starting — _LLMCancelledError is NOT in the
         # retry list so tenacity lets it propagate immediately.
+        if _cancelled.is_set():
+            raise _LLMCancelledError("LLM call cancelled")
+        system_logger.info(f"[LLMRunner] Запущен воркер [id: {worker_id}] для: {label}")
+        try:
+            with rate_limiter:
+                proc = subprocess.Popen(
+                    command,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding='utf-8',
+                    cwd=_get_subprocess_cwd(),
+                )
+            with _registry_lock:
+                _active_processes.append(proc)
+            try:
+                try:
+                    stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.communicate()
+                    system_logger.error(f"[LLMRunner] Воркер [id: {worker_id}] превысил лимит времени ({timeout}с). Принудительное завершение.")
+                    raise
+                if proc.returncode != 0:
+                    exc = subprocess.CalledProcessError(proc.returncode, command, stdout, stderr)
+                    system_logger.error(f"[LLMRunner] Воркер [id: {worker_id}] для {label} завершился с ошибкой (код: {proc.returncode}).")
+                    output_logger.error(f"[{worker_id}] --- FAILED OUTPUT FROM: {label} ---\n{stderr.strip()}\n")
+                    raise exc
+                return stdout
+            finally:
+                with _registry_lock:
+                    try:
+                        _active_processes.remove(proc)
+                    except ValueError:
+                        pass
+        except subprocess.CalledProcessError:
+            raise
+        except subprocess.TimeoutExpired:
+            raise
+
+    stdout = _execute()
+    output_logger.info(f"[{worker_id}] --- SUCCESSFUL OUTPUT FROM: {label} ---\n{stdout}\n")
+    return stdout
+
+
+def run_qwen(
+    prompt: str,
+    model_name: str,
+    output_format: str,
+    rate_limiter: RateLimiter,
+    timeout: int,
+    retry_attempts: int,
+    retry_wait_min: int,
+    retry_wait_max: int,
+    worker_id: str,
+    label: str,
+) -> str:
+    """Run qwen-code CLI with the given prompt and return stdout.
+
+    qwen-code is a fork of gemini-cli with an identical stdin/stdout interface.
+    Differences from run_gemini(): binary is 'qwen'; headless mode is triggered
+    via '--approval-mode yolo' instead of '-p " "'.
+
+    Args:
+        prompt: The full prompt string to send via stdin.
+        model_name: Qwen model identifier (e.g. 'qwen-plus').
+        output_format: 'text' or 'json'.
+        rate_limiter: Shared rate limiter instance.
+        timeout: Subprocess timeout in seconds.
+        retry_attempts: Max retry attempts on CalledProcessError/TimeoutExpired.
+        retry_wait_min: Min wait between retries (seconds).
+        retry_wait_max: Max wait between retries (seconds).
+        worker_id: Short ID for logging.
+        label: Human-readable label for log messages (e.g. 'chunk_3').
+
+    Returns:
+        stdout string from qwen-code.
+
+    Raises:
+        subprocess.CalledProcessError: After exhausting retries.
+        subprocess.TimeoutExpired: After exhausting retries.
+    """
+    # Pass prompt via stdin to avoid ARG_MAX limits and prevent prompt leakage in `ps aux`.
+    # '--approval-mode yolo' triggers non-interactive (headless) mode in qwen-code.
+    command = ['qwen', '-m', model_name, '--output-format', output_format, '--approval-mode', 'yolo']
+    input_logger.info(f"[{worker_id}] --- PROMPT FOR: {label} ---\n{prompt}\n")
+
+    @retry(
+        stop=stop_after_attempt(retry_attempts),
+        wait=wait_exponential(multiplier=1, min=retry_wait_min, max=retry_wait_max),
+        retry=retry_if_exception_type((subprocess.CalledProcessError, subprocess.TimeoutExpired)),
+        reraise=True,
+    )
+    def _execute() -> str:
         if _cancelled.is_set():
             raise _LLMCancelledError("LLM call cancelled")
         system_logger.info(f"[LLMRunner] Запущен воркер [id: {worker_id}] для: {label}")
@@ -282,7 +380,7 @@ def run_llm(
     """Dispatch an LLM call to the configured backend.
 
     Args:
-        backend: 'gemini' or 'ollama'.
+        backend: 'gemini', 'qwen', or 'ollama'.
         All other args passed through to the backend-specific runner.
 
     Returns:
@@ -303,6 +401,19 @@ def run_llm(
             ollama_url=ollama_url,
             ollama_options=ollama_options,
         )
+    if backend == "qwen":
+        return run_qwen(
+            prompt=prompt,
+            model_name=model_name,
+            output_format=output_format,
+            rate_limiter=rate_limiter,
+            timeout=timeout,
+            retry_attempts=retry_attempts,
+            retry_wait_min=retry_wait_min,
+            retry_wait_max=retry_wait_max,
+            worker_id=worker_id,
+            label=label,
+        )
     return run_gemini(
         prompt=prompt,
         model_name=model_name,
@@ -315,6 +426,19 @@ def run_llm(
         worker_id=worker_id,
         label=label,
     )
+
+
+def check_qwen_binary() -> None:
+    """Verify that the qwen-code CLI is available in PATH.
+
+    Raises:
+        RuntimeError: If 'qwen' binary is not found.
+    """
+    if shutil.which('qwen') is None:
+        raise RuntimeError(
+            "Команда 'qwen' не найдена в PATH. "
+            "Установите qwen-code: npm install -g qwen-code"
+        )
 
 
 def check_ollama_connection(ollama_url: str, required_models: list[str]) -> None:

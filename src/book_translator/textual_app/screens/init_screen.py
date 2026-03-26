@@ -94,6 +94,36 @@ max_concurrent = 3
 max_rps = 100.0
 '''
 
+TOML_TEMPLATE_QWEN = '''[series]
+name = "{name}"
+source_lang = "{source_lang}"
+target_lang = "{target_lang}"
+
+# LLM backend: "qwen" (cloud, via qwen-code CLI)
+[llm]
+backend = "qwen"
+
+# Qwen model configuration
+[qwen_cli]
+model = "qwen-plus"
+worker_timeout_seconds = 120
+proofreading_timeout_seconds = 300
+
+[retry]
+max_attempts = 3
+wait_min_seconds = 4
+wait_max_seconds = 10
+
+[splitter]
+target_chunk_size = 600
+max_part_chars = 800
+min_chunk_size = 300
+
+[workers]
+max_concurrent = 50
+max_rps = 2.0
+'''
+
 WORLD_INFO_TEMPLATE = '''# Информация о мире
 
 ## Сеттинг
@@ -154,7 +184,8 @@ def run_init(args) -> None:
 
     # Write marker file (book-translator.toml)
     backend = getattr(args, 'backend', 'gemini')
-    template = TOML_TEMPLATE_OLLAMA if backend == 'ollama' else TOML_TEMPLATE_GEMINI
+    _templates = {'ollama': TOML_TEMPLATE_OLLAMA, 'qwen': TOML_TEMPLATE_QWEN}
+    template = _templates.get(backend, TOML_TEMPLATE_GEMINI)
     toml_content = template.format(
         name=args.name,
         source_lang=args.source_lang,
@@ -210,6 +241,7 @@ class InitScreen(Screen):
             yield Label("LLM-бэкенд:", classes="field-label")
             with RadioSet(id="backend-select"):
                 yield RadioButton("Gemini (облачный)", value=True, id="radio-gemini")
+                yield RadioButton("Qwen (облачный)", id="radio-qwen")
                 yield RadioButton("Ollama (локальный)", id="radio-ollama")
 
             yield Label("", id="init-status")
@@ -256,7 +288,12 @@ class InitScreen(Screen):
         name = self.query_one("#input-name", Input).value.strip()
         source_lang = self.query_one("#input-source-lang", Input).value.strip() or "ja"
         target_lang = self.query_one("#input-target-lang", Input).value.strip() or "ru"
-        backend = "ollama" if self.query_one("#radio-ollama", RadioButton).value else "gemini"
+        if self.query_one("#radio-ollama", RadioButton).value:
+            backend = "ollama"
+        elif self.query_one("#radio-qwen", RadioButton).value:
+            backend = "qwen"
+        else:
+            backend = "gemini"
         status_label = self.query_one("#init-status", Label)
 
         # Determine series name

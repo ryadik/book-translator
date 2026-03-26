@@ -115,6 +115,20 @@ def test_init_ollama_backend(tmp_path, monkeypatch):
     assert cfg['workers']['max_rps'] == 100.0
 
 
+def test_init_qwen_backend(tmp_path, monkeypatch):
+    """Test that Qwen backend generates correct config."""
+    monkeypatch.chdir(tmp_path)
+    args = Namespace(name='Test', source_lang='ja', target_lang='ru', backend='qwen')
+    run_init(args)
+    with open(tmp_path / 'Test' / 'book-translator.toml', 'rb') as f:
+        cfg = tomllib.load(f)
+    assert cfg['llm']['backend'] == 'qwen'
+    assert cfg['qwen_cli']['model'] == 'qwen-plus'
+    assert cfg['qwen_cli']['worker_timeout_seconds'] == 120
+    assert cfg['workers']['max_concurrent'] == 50
+    assert cfg['workers']['max_rps'] == 2.0
+
+
 def test_init_use_current_dir(tmp_path, monkeypatch):
     """Test initialization in current directory."""
     work_dir = tmp_path / 'workspace'

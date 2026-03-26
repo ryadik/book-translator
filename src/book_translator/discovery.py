@@ -168,9 +168,9 @@ def _validate_config(config: dict) -> None:
 
     # Validate llm backend
     backend = config['llm'].get('backend')
-    if backend not in ('gemini', 'ollama'):
+    if backend not in ('gemini', 'ollama', 'qwen'):
         raise ValueError(
-            f"Invalid 'llm.backend': {backend!r}. Must be 'gemini' or 'ollama'."
+            f"Invalid 'llm.backend': {backend!r}. Must be 'gemini', 'qwen', or 'ollama'."
         )
 
     # Validate ollama model names (non-empty strings)

@@ -414,6 +414,12 @@ def run_translation_process(
         translation_model = stage_models.get('translation', 'qwen3:30b-a3b')
         proofreading_model = stage_models.get('proofreading', 'qwen3:30b-a3b')
         global_proofreading_model = stage_models.get('global_proofreading', 'qwen3:14b')
+    elif backend == 'qwen':
+        qwen_model = cfg.get('qwen_cli', {}).get('model', 'qwen-plus')
+        discovery_model = qwen_model
+        translation_model = qwen_model
+        proofreading_model = qwen_model
+        global_proofreading_model = qwen_model
     else:
         gemini_model = cfg.get('gemini_cli', {}).get('model', 'gemini-2.5-pro')
         discovery_model = gemini_model
@@ -490,10 +496,12 @@ def run_translation_process(
         ollama_options=ollama_options,
     )
 
-    # Validate Ollama connectivity before starting the pipeline
+    # Validate backend connectivity before starting the pipeline
     if backend == 'ollama':
         required = list({discovery_model, translation_model, proofreading_model, global_proofreading_model})
         llm_runner.check_ollama_connection(ollama_url, required)
+    elif backend == 'qwen':
+        llm_runner.check_qwen_binary()
 
     # Handle restart_stage: reset pipeline to the requested stage
     if restart_stage and restart_stage in _STAGE_PENDING_STATUS:
