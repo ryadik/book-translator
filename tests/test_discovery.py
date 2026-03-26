@@ -249,6 +249,18 @@ class TestConfigValidation:
         # other models keep defaults
         assert cfg['llm']['models']['discovery'] == 'qwen3:8b'
 
+    def test_user_can_set_qwen_backend(self, tmp_path):
+        self._write_toml(tmp_path, '[llm]\nbackend = "qwen"\n[qwen_cli]\nmodel = "qwen-plus"')
+        cfg = load_series_config(tmp_path)
+        assert cfg['llm']['backend'] == 'qwen'
+
+    def test_qwen_backend_gets_cloud_timeouts(self, tmp_path):
+        """qwen is a cloud backend — should get 120s/300s like gemini, not 600s/900s like ollama."""
+        self._write_toml(tmp_path, '[llm]\nbackend = "qwen"')
+        cfg = load_series_config(tmp_path)
+        assert cfg['llm']['worker_timeout_seconds'] == 120
+        assert cfg['llm']['proofreading_timeout_seconds'] == 300
+
     def test_invalid_backend_raises(self, tmp_path):
         self._write_toml(tmp_path, '[llm]\nbackend = "invalid_backend"')
         with pytest.raises(ValueError, match="llm.backend"):

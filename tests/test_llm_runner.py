@@ -1,11 +1,13 @@
-"""Tests for llm_runner — focuses on run_ollama() and run_llm() dispatcher.
+"""Tests for llm_runner — focuses on run_ollama(), run_qwen(), and run_llm() dispatcher.
 
 run_gemini() is a thin subprocess wrapper tested implicitly via integration tests.
 """
+import subprocess
+from typing import Any
 import pytest
 from unittest.mock import patch, MagicMock
 
-from book_translator.llm_runner import run_ollama, run_llm, check_ollama_connection
+from book_translator.llm_runner import run_ollama, run_qwen, run_llm, check_ollama_connection, check_qwen_binary
 from book_translator.rate_limiter import RateLimiter
 
 
@@ -134,7 +136,110 @@ class TestRunOllama:
                 )
 
 
+def _qwen_kwargs(**overrides) -> Any:
+    base: dict[str, Any] = dict(
+        prompt="test prompt",
+        model_name="qwen-plus",
+        output_format="text",
+        rate_limiter=_make_rate_limiter(),
+        timeout=60,
+        retry_attempts=1,
+        retry_wait_min=0,
+        retry_wait_max=0,
+        worker_id="t1",
+        label="chunk_0",
+    )
+    base.update(overrides)
+    return base
+
+
+class TestRunQwen:
+    def _mock_proc(self, stdout: str = "translated text", returncode: int = 0):
+        proc = MagicMock()
+        proc.communicate.return_value = (stdout, "")
+        proc.returncode = returncode
+        return proc
+
+    def test_returns_stdout_on_success(self):
+        proc = self._mock_proc("Переведённый текст")
+        with patch("book_translator.llm_runner.subprocess.Popen", return_value=proc):
+            result = run_qwen(**_qwen_kwargs())  # type: ignore[arg-type]
+        assert result == "Переведённый текст"
+
+    def test_command_uses_qwen_binary_and_approval_mode(self):
+        proc = self._mock_proc()
+        with patch("book_translator.llm_runner.subprocess.Popen", return_value=proc) as mock_popen:
+            run_qwen(**_qwen_kwargs(model_name="qwen-max", output_format="json"))  # type: ignore[arg-type]
+        cmd = mock_popen.call_args[0][0]
+        assert cmd[0] == "qwen"
+        assert "-m" in cmd and "qwen-max" in cmd
+        assert "--output-format" in cmd and "json" in cmd
+        assert "--approval-mode" in cmd and "yolo" in cmd
+        # Must NOT contain gemini's '-p' trick
+        assert "-p" not in cmd
+
+    def test_prompt_passed_via_stdin_not_args(self):
+        """Prompt must go to stdin, not appear in the command array."""
+        proc = self._mock_proc()
+        with patch("book_translator.llm_runner.subprocess.Popen", return_value=proc) as mock_popen:
+            run_qwen(**_qwen_kwargs(prompt="secret prompt"))  # type: ignore[arg-type]
+        cmd = mock_popen.call_args[0][0]
+        assert "secret prompt" not in " ".join(cmd)
+        stdin_input = proc.communicate.call_args[1].get("input") or proc.communicate.call_args[0][0]
+        assert "secret prompt" in stdin_input
+
+    def test_raises_called_process_error_on_nonzero_exit(self):
+        proc = self._mock_proc(returncode=1)
+        with patch("book_translator.llm_runner.subprocess.Popen", return_value=proc):
+            with pytest.raises(subprocess.CalledProcessError):
+                run_qwen(**_qwen_kwargs())  # type: ignore[arg-type]
+
+    def test_raises_timeout_expired_on_timeout(self):
+        proc = MagicMock()
+        proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="qwen", timeout=60)
+        proc.returncode = None
+        with patch("book_translator.llm_runner.subprocess.Popen", return_value=proc):
+            with pytest.raises(subprocess.TimeoutExpired):
+                run_qwen(**_qwen_kwargs())  # type: ignore[arg-type]
+
+    def test_cancelled_raises_immediately_without_retry(self):
+        import book_translator.llm_runner as runner_mod
+        runner_mod._cancelled.set()
+        try:
+            proc = self._mock_proc()
+            with patch("book_translator.llm_runner.subprocess.Popen", return_value=proc) as mock_popen:
+                with pytest.raises(Exception):
+                    run_qwen(**_qwen_kwargs(retry_attempts=3))  # type: ignore[arg-type]
+            # Popen must never be called — cancellation fires before subprocess spawn
+            mock_popen.assert_not_called()
+        finally:
+            runner_mod._cancelled.clear()
+
+
+class TestCheckQwenBinary:
+    def test_passes_when_binary_found(self):
+        with patch("book_translator.llm_runner.shutil.which", return_value="/usr/local/bin/qwen"):
+            check_qwen_binary()  # should not raise
+
+    def test_raises_runtime_error_when_binary_missing(self):
+        with patch("book_translator.llm_runner.shutil.which", return_value=None):
+            with pytest.raises(RuntimeError, match="qwen"):
+                check_qwen_binary()
+
+
 class TestRunLlmDispatcher:
+    def test_routes_qwen_to_run_qwen(self):
+        rl = _make_rate_limiter()
+        with patch("book_translator.llm_runner.run_qwen", return_value="qwen result") as mock_qwen:
+            result = run_llm(
+                backend="qwen", prompt="test", model_name="qwen-plus",
+                output_format="text", rate_limiter=rl, timeout=60,
+                retry_attempts=1, retry_wait_min=1, retry_wait_max=2,
+                worker_id="test", label="chunk_0",
+            )
+        assert result == "qwen result"
+        mock_qwen.assert_called_once()
+
     def test_routes_ollama_to_run_ollama(self):
         with patch("book_translator.llm_runner.run_ollama", return_value="ollama result") as mock_ollama:
             result = run_llm(
