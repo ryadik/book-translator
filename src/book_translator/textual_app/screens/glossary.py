@@ -78,6 +78,7 @@ class GlossaryScreen(Screen):
         Binding("enter", "edit_selected", "Изменить", priority=True),
         Binding("d", "delete_selected", "Удалить", priority=True),
         Binding("e", "export_tsv", "Экспорт", priority=True),
+        Binding("i", "import_tsv", "Импорт", priority=True),
         Binding("r", "refresh", "Обновить", priority=True),
         Binding("f", "focus_search", "Поиск", show=False, priority=True),
     ]
@@ -90,6 +91,7 @@ class GlossaryScreen(Screen):
             yield Button("✏️ Изменить", id="btn-edit")
             yield Button("🗑 Удалить", id="btn-delete", variant="error")
             yield Button("Экспорт TSV", id="btn-export")
+            yield Button("Импорт TSV", id="btn-import")
         yield Static("", id="status-bar")
         yield DataTable(id="term-table", cursor_type="row")
         yield Footer()
@@ -134,7 +136,7 @@ class GlossaryScreen(Screen):
                 t.get("comment") or "",
             )
         self.query_one("#status-bar", Static).update(
-            f"[dim]{len(terms)} терминов  •  Enter — изменить  •  a — добавить  •  d — удалить[/dim]"
+            f"[dim]{len(terms)} терминов  •  Enter — изменить  •  a — добавить  •  d — удалить  •  i — импорт[/dim]"
         )
 
     def _get_selected_row(self) -> tuple[str, str, str] | None:
@@ -249,6 +251,64 @@ class GlossaryScreen(Screen):
             )
         self.notify(f"Экспортировано {count} терминов → {output_path.name}")
 
+    def action_import_tsv(self) -> None:
+        """Import terms from TSV file."""
+        from textual.widgets import Input
+        from textual.screen import ModalScreen
+        from textual.app import ComposeResult
+        from textual.containers import Vertical, Horizontal
+
+        class ImportPathModal(ModalScreen):
+            def compose(self) -> ComposeResult:
+                with Vertical(id="modal-box"):
+                    yield Label("Импорт глоссария из TSV", id="modal-title")
+                    yield Input(placeholder="Путь к TSV-файлу", id="input-path")
+                    with Horizontal():
+                        yield Button("Импорт", id="btn-import", variant="primary")
+                        yield Button("Отмена", id="btn-cancel")
+
+            def on_button_pressed(self, event: Button.Pressed) -> None:
+                if event.button.id == "btn-import":
+                    path = self.query_one("#input-path", Input).value.strip()
+                    if path:
+                        self.dismiss(Path(path))
+                    else:
+                        self.query_one("#modal-title", Label).update(
+                            "[red]Введите путь к файлу[/red]"
+                        )
+                else:
+                    self.dismiss(None)
+
+            def on_key(self, event) -> None:
+                if event.key == "enter":
+                    path = self.query_one("#input-path", Input).value.strip()
+                    if path:
+                        self.dismiss(Path(path))
+                elif event.key == "escape":
+                    self.dismiss(None)
+
+        def _on_path_selected(tsv_path: Path | None) -> None:
+            if tsv_path is None:
+                return
+            if not tsv_path.is_file():
+                self.notify(f"Файл не найден: {tsv_path}", severity="error")
+                return
+
+            config = self._config()
+            glossary_db = self._series_root() / "glossary.db"
+            try:
+                count = glossary_manager.import_tsv(
+                    glossary_db, tsv_path,
+                    config["series"]["source_lang"],
+                    config["series"]["target_lang"],
+                )
+                self.notify(f"Импортировано {count} терминов из {tsv_path.name}")
+                self._load_terms()
+            except Exception as e:
+                self.notify(f"Ошибка импорта: {e}", severity="error")
+
+        self.app.push_screen(ImportPathModal(), _on_path_selected)
+
     # ── Event handlers ────────────────────────────────────────────────────────
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -264,3 +324,5 @@ class GlossaryScreen(Screen):
             self.action_delete_selected()
         elif event.button.id == "btn-export":
             self.action_export_tsv()
+        elif event.button.id == "btn-import":
+            self.action_import_tsv()

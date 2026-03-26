@@ -5,7 +5,7 @@ from pathlib import Path
 
 from textual.widgets import Button, DataTable, ProgressBar, Select, Static
 
-from book_translator.commands.init_cmd import run_init
+from book_translator.textual_app.screens.init_screen import run_init
 from book_translator.logger import TUILogHandler
 from book_translator.log_viewer import (
     build_worker_status_rows,
@@ -48,10 +48,19 @@ async def _press(app: BookTranslatorApp, *keys: str) -> None:
 
 def test_dashboard_hotkey_opens_logs_screen(tmp_path):
     series_root = _create_series(tmp_path)
+    # Create a chapter file so it appears in the tree
+    chapter_path = series_root / "volume-01" / "source" / "chapter-01.txt"
+    chapter_path.write_text("test content", encoding="utf-8")
+
     app = BookTranslatorApp(series_root=series_root)
 
     async def scenario():
         async with app.run_test() as pilot:
+            # First select a chapter in the tree, then press 'l'
+            await pilot.press("down")  # Select first volume
+            await pilot.pause()
+            await pilot.press("down")  # Select first chapter
+            await pilot.pause()
             await pilot.press("l")
             await pilot.pause()
             assert app.screen.__class__.__name__ == "LogScreen"
@@ -102,6 +111,10 @@ def test_theme_choice_persists_between_sessions(tmp_path, monkeypatch):
 
 def test_log_screen_falls_back_to_global_history_when_selected_chapter_has_no_runs(tmp_path):
     series_root = _create_series(tmp_path)
+    # Create a chapter file so it appears in the tree
+    chapter_path = series_root / "volume-01" / "source" / "chapter-01.txt"
+    chapter_path.write_text("test content", encoding="utf-8")
+
     volume_logs_dir = series_root / "volume-01" / ".state" / "logs"
     artifacts = create_run_artifacts(
         volume_logs_dir,
@@ -133,6 +146,11 @@ def test_log_screen_falls_back_to_global_history_when_selected_chapter_has_no_ru
 
     async def scenario():
         async with app.run_test() as pilot:
+            # Navigate to a chapter first, then press 'l'
+            await pilot.press("down")  # Select volume
+            await pilot.pause()
+            await pilot.press("down")  # Select chapter
+            await pilot.pause()
             await pilot.press("l")
             await pilot.pause()
             assert app.screen.__class__.__name__ == "LogScreen"
@@ -335,6 +353,10 @@ def test_translation_screen_debug_table_tracks_worker_states(tmp_path, monkeypat
 
 def test_log_screen_stage_filter_hides_other_stage_records(tmp_path):
     series_root = _create_series(tmp_path)
+    # Create a chapter file so it appears in the tree
+    chapter_path = series_root / "volume-01" / "source" / "chapter-01.txt"
+    chapter_path.write_text("test content", encoding="utf-8")
+
     volume_logs_dir = series_root / "volume-01" / ".state" / "logs"
     artifacts = create_run_artifacts(
         volume_logs_dir,
@@ -391,6 +413,11 @@ def test_log_screen_stage_filter_hides_other_stage_records(tmp_path):
 
     async def scenario():
         async with app.run_test() as pilot:
+            # Navigate to a chapter first, then press 'l'
+            await pilot.press("down")  # Select volume
+            await pilot.pause()
+            await pilot.press("down")  # Select chapter
+            await pilot.pause()
             await pilot.press("l")
             await pilot.pause()
 

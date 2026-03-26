@@ -1,7 +1,5 @@
-import pytest
 from io import StringIO
-from pathlib import Path
-from book_translator.db import init_glossary_db, add_term, get_terms
+from book_translator.db import init_glossary_db, add_term, get_terms, connection
 from book_translator.glossary_manager import export_tsv, import_tsv, generate_approval_tsv
 
 
@@ -46,12 +44,9 @@ def test_export_import_roundtrip(tmp_path):
     tsv_path = tmp_path / 'export.tsv'
     with open(tsv_path, 'w', encoding='utf-8') as f:
         export_tsv(db_path, f)
-    # Clear DB
-    import sqlite3
-    conn = sqlite3.connect(str(db_path))
-    conn.execute('DELETE FROM glossary')
-    conn.commit()
-    conn.close()
+    # Clear DB using the module's connection API
+    with connection(db_path) as conn:
+        conn.execute('DELETE FROM glossary')
     # Import back
     count = import_tsv(db_path, tsv_path)
     assert count == 1
@@ -90,16 +85,6 @@ def test_import_empty_file(tmp_path):
     count = import_tsv(db_path, tsv)
     assert count == 0
 
-
-def test_export_tsv_stdout_default(tmp_path, capsys):
-    """export_tsv with no output arg writes to stdout."""
-    db_path = tmp_path / 'glossary.db'
-    init_glossary_db(db_path)
-    add_term(db_path, '勇者', 'герой')
-    count = export_tsv(db_path)
-    captured = capsys.readouterr()
-    assert count == 1
-    assert '勇者' in captured.out
 
 
 def test_import_tsv_with_comment(tmp_path):

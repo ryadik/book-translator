@@ -5,24 +5,22 @@ Provides functions to export glossary terms to TSV format,
 import terms from TSV files, and generate approval TSV buffers
 for LLM-discovered terms.
 """
-import sys
 from pathlib import Path
 from typing import TextIO
 
-from book_translator.db import add_term, get_terms, init_glossary_db
+from book_translator.db import add_term, get_terms
 
 TSV_HEADER = '# source_term\ttarget_term\tcomment'
 
 
-def export_tsv(db_path: Path, output: TextIO = None,
+def export_tsv(db_path: Path, output: TextIO,
                source_lang: str = 'ja', target_lang: str = 'ru') -> int:
     """Export glossary to TSV format. Returns number of terms exported."""
-    out = output or sys.stdout
     terms = get_terms(db_path, source_lang, target_lang)
-    out.write(TSV_HEADER + '\n')
+    output.write(TSV_HEADER + '\n')
     for term in terms:
         line = f"{term['term_source']}\t{term['term_target']}\t{term.get('comment', '')}"
-        out.write(line + '\n')
+        output.write(line + '\n')
     return len(terms)
 
 

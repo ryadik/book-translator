@@ -29,7 +29,7 @@ def create_test_series(tmp_path):
     """Helper: create a minimal series for testing via run_init."""
     old_cwd = os.getcwd()
     os.chdir(tmp_path)
-    from book_translator.commands.init_cmd import run_init
+    from book_translator.textual_app.screens.init_screen import run_init
     run_init(Namespace(name='TestSeries', source_lang='ja', target_lang='ru'))
     os.chdir(old_cwd)
     series_root = tmp_path / 'TestSeries'

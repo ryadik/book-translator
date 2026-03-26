@@ -65,10 +65,10 @@ class TestLoadSeriesConfig:
         cfg = load_series_config(tmp_path)
         assert cfg['series']['target_lang'] == 'ru'
 
-    def test_applies_default_model(self, tmp_path):
+    def test_applies_default_backend(self, tmp_path):
         make_toml(tmp_path)
         cfg = load_series_config(tmp_path)
-        assert cfg['gemini_cli']['model'] == 'gemini-2.5-pro'
+        assert cfg['llm']['backend'] == 'gemini'
 
     def test_applies_default_splitter(self, tmp_path):
         make_toml(tmp_path)
@@ -87,11 +87,11 @@ class TestLoadSeriesConfig:
         cfg = load_series_config(tmp_path)
         assert cfg['series']['source_lang'] == 'en'
 
-    def test_user_overrides_model(self, tmp_path):
-        content = '[series]\nname = "Test"\n[gemini_cli]\nmodel = "gemini-3-pro-preview"'
+    def test_user_overrides_backend(self, tmp_path):
+        content = '[series]\nname = "Test"\n[llm]\nbackend = "ollama"'
         make_toml(tmp_path, content)
         cfg = load_series_config(tmp_path)
-        assert cfg['gemini_cli']['model'] == 'gemini-3-pro-preview'
+        assert cfg['llm']['backend'] == 'ollama'
 
     def test_user_overrides_workers(self, tmp_path):
         content = '[series]\nname = "Test"\n[workers]\nmax_concurrent = 10'
@@ -201,20 +201,20 @@ class TestConfigValidation:
     # ── Timeouts ──────────────────────────────────────────────────────────────
 
     def test_negative_worker_timeout_raises(self, tmp_path):
-        self._write_toml(tmp_path, '[gemini_cli]\nworker_timeout_seconds = -10')
+        self._write_toml(tmp_path, '[llm]\nworker_timeout_seconds = -10')
         with pytest.raises(ValueError, match="worker_timeout_seconds"):
             load_series_config(tmp_path)
 
     def test_zero_proofreading_timeout_raises(self, tmp_path):
-        self._write_toml(tmp_path, '[gemini_cli]\nproofreading_timeout_seconds = 0')
+        self._write_toml(tmp_path, '[llm]\nproofreading_timeout_seconds = 0')
         with pytest.raises(ValueError, match="proofreading_timeout_seconds"):
             load_series_config(tmp_path)
 
     def test_valid_float_timeout_passes(self, tmp_path):
         """Timeouts can be floats, e.g. 0.5 for testing."""
-        self._write_toml(tmp_path, '[gemini_cli]\nworker_timeout_seconds = 30.5')
+        self._write_toml(tmp_path, '[llm]\nworker_timeout_seconds = 30.5')
         cfg = load_series_config(tmp_path)
-        assert cfg['gemini_cli']['worker_timeout_seconds'] == 30.5
+        assert cfg['llm']['worker_timeout_seconds'] == 30.5
 
     # ── LLM backend ───────────────────────────────────────────────────────────
 

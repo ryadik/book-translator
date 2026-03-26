@@ -57,8 +57,8 @@ def test_collect_wrapper_with_empty_response_skipped():
     assert result == []
 
 
-def test_collect_backward_compat_old_category_format():
-    """Old format with categories dict is still parsed correctly."""
+def test_collect_ignores_old_category_format():
+    """Old format with categories dict is no longer supported - returns empty."""
     from book_translator.term_collector import collect_terms_from_responses
     old_format = json.dumps({
         "characters": {
@@ -68,8 +68,7 @@ def test_collect_backward_compat_old_category_format():
         "expressions": {},
     })
     result = collect_terms_from_responses([old_format])
-    assert len(result) == 1
-    assert result[0]['source'] == 'キリト'
-    assert result[0]['target'] == 'Кирито'
+    # Legacy format is no longer supported - should return empty list
+    assert result == []
 
 

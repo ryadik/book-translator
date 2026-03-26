@@ -7,41 +7,13 @@ from book_translator.utils import parse_llm_json
 def _parse_terms_from_data(data: Any) -> list[dict]:
     """Extract a flat list of {source, target, comment} dicts from parsed LLM output.
 
-    Accepts both the new flat array format and the old categorised dict format
-    (backward compatibility for cached responses).
+    Accepts only the flat array format: [{source, target, comment}, ...]
     """
     if isinstance(data, list):
-        # New format: [{source, target, comment}, ...]
         terms = []
         for item in data:
             if isinstance(item, dict) and item.get('source') and item.get('target'):
                 terms.append(item)
-        return terms
-
-    if isinstance(data, dict):
-        # Old format: {characters: {id: {source, target, comment}}, ...}
-        _LEGACY_CATEGORIES = {"characters", "terminology", "expressions"}
-        if not (data.keys() & _LEGACY_CATEGORIES):
-            return []
-        terms = []
-        for category, items in data.items():
-            if not isinstance(items, dict):
-                continue
-            for term_id, term_data in items.items():
-                if not isinstance(term_data, dict):
-                    continue
-                source = (term_data.get('source') or
-                          term_data.get('name', {}).get('source') or
-                          term_data.get('term_source') or
-                          term_data.get('term_jp') or
-                          term_id)
-                target = (term_data.get('target') or
-                          term_data.get('name', {}).get('target') or
-                          term_data.get('term_target') or
-                          term_data.get('term_ru', ''))
-                comment = term_data.get('comment') or term_data.get('description', '')
-                if source and target:
-                    terms.append({'source': source, 'target': target, 'comment': comment})
         return terms
 
     return []
