@@ -11,7 +11,6 @@ from textual.containers import Vertical
 
 from book_translator import db, discovery
 from book_translator.textual_app.messages import DashboardRefreshRequested
-from book_translator.textual_app.screens.batch_translation import BatchTranslationScreen
 
 
 # Map chapter stage → display label
@@ -32,7 +31,6 @@ class DashboardScreen(Screen):
         Binding("r", "refresh", "Обновить", priority=True),
         Binding("enter", "translate_selected", "Перевести", priority=True),
         Binding("t", "translate_selected", "Перевести", show=False, priority=True),
-        Binding("a", "translate_all", "Все главы", priority=True),
         Binding("i", "init_series", "Новая серия", show=False, priority=True),
         Binding("g", "switch_to_glossary", "Глоссарий", priority=True),
         Binding("p", "switch_to_prompts", "Промпты", priority=True),
@@ -84,7 +82,13 @@ class DashboardScreen(Screen):
             src = config["series"]["source_lang"]
             tgt = config["series"]["target_lang"]
             backend = config.get("llm", {}).get("backend", "gemini")
-            model = config.get("llm", {}).get("models", {}).get("translation", "gemini-2.5-pro")
+            stage_models = config.get("llm", {}).get("models", {})
+            if backend == 'ollama':
+                model = stage_models.get("translation", "qwen3:30b-a3b")
+            elif backend == 'qwen':
+                model = config.get('qwen_cli', {}).get('model', 'qwen-plus')
+            else:
+                model = config.get('gemini_cli', {}).get('model', 'gemini-2.5-pro')
             glossary_db = series_root / "glossary.db"
             db.init_glossary_db(glossary_db)
             term_count = len(db.get_terms(glossary_db, src, tgt))
@@ -246,54 +250,6 @@ class DashboardScreen(Screen):
             if options is None:
                 return  # user cancelled
             self.app.push_screen(TranslationScreen(series_root, chapter_path, options))
-
-        self.app.push_screen(TranslationOptionsModal(), _on_options)
-
-    def action_translate_all(self) -> None:
-        """Translate all pending chapters across all volumes."""
-        from book_translator.textual_app.screens.translation_options import TranslationOptionsModal
-
-        series_root: Path = self.app.series_root  # type: ignore[attr-defined]
-
-        # Collect all pending chapters
-        pending_chapters: list[tuple[Path, Path]] = []  # (chapter_path, series_root)
-
-        volume_dirs = sorted(
-            d for d in series_root.iterdir()
-            if d.is_dir() and (d / "source").is_dir()
-        )
-
-        for vol_dir in volume_dirs:
-            source_dir = vol_dir / "source"
-            chunks_db = vol_dir / ".state" / "chunks.db"
-
-            for src_file in sorted(source_dir.glob("*.txt")):
-                chapter_name = src_file.stem
-                # Check if chapter needs translation
-                needs_translation = True
-                if chunks_db.exists():
-                    try:
-                        db.init_chunks_db(chunks_db)
-                        stage = db.get_chapter_stage(chunks_db, chapter_name)
-                        if stage == "complete":
-                            needs_translation = False
-                    except Exception:
-                        pass
-                if needs_translation:
-                    pending_chapters.append((src_file, series_root))
-
-        if not pending_chapters:
-            self.notify("Нет глав для перевода (все уже завершены)", severity="information")
-            return
-
-        def _on_options(options: dict | None) -> None:
-            if options is None:
-                return  # user cancelled
-
-            # Create a batch translation screen that processes all chapters
-            self.app.push_screen(
-                BatchTranslationScreen(pending_chapters, options)
-            )
 
         self.app.push_screen(TranslationOptionsModal(), _on_options)
 

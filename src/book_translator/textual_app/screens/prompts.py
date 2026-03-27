@@ -78,7 +78,7 @@ class PromptsScreen(Screen):
         super().__init__()
         self._backend = "gemini"
         self._current_key = "translation"
-        self._prompt_options: list[tuple[str, str]] = []
+        self._prompt_options: list[tuple[str, str]] = self._build_prompt_options()
 
     def _detect_backend(self) -> str:
         """Detect the LLM backend from series config."""
@@ -99,7 +99,7 @@ class PromptsScreen(Screen):
         yield Label("📝 Промпты и файлы серии", id="prompts-title")
         with Horizontal(id="prompt-selector-bar"):
             yield Select(
-                [],  # Will be populated in on_mount
+                [(label, name) for label, name in self._prompt_options if name not in _SEP_KEYS],
                 id="prompt-select",
                 allow_blank=False,
                 value="translation",
