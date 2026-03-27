@@ -42,6 +42,7 @@ class TranslationOptionsModal(ModalScreen):
             )
             with Horizontal(id="options-buttons"):
                 yield Button("▶ Начать перевод", id="btn-start", variant="primary")
+                yield Button("📦 Только конвертировать", id="btn-convert", variant="default")
                 yield Button("Отмена", id="btn-cancel")
 
     def action_cancel(self) -> None:
@@ -55,14 +56,17 @@ class TranslationOptionsModal(ModalScreen):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-start":
-            self._submit()
+            self._submit(convert_only=False)
+        elif event.button.id == "btn-convert":
+            self._submit(convert_only=True)
         elif event.button.id == "btn-cancel":
             self.dismiss(None)
 
-    def _submit(self) -> None:
+    def _submit(self, convert_only: bool = False) -> None:
         stage_val = self.query_one("#select-stage", Select).value
         restart_stage = None if (not stage_val or stage_val == "none") else str(stage_val)
         self.dismiss({
+            "convert_only":  convert_only,
             "debug":         self.query_one("#check-debug",  Checkbox).value,
             "force":         self.query_one("#check-force",  Checkbox).value,
             "resume":        self.query_one("#check-resume", Checkbox).value,
