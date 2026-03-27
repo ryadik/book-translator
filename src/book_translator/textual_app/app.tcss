@@ -99,8 +99,19 @@ Footer {
     margin: 1 1;
 }
 
+#action-buttons {
+    height: auto;
+    padding: 1 1;
+    align: left middle;
+}
+
+#pause-btn {
+    margin: 0 1;
+    width: 24;
+}
+
 #cancel-btn {
-    margin: 1 2;
+    margin: 0 1;
     width: 24;
 }
 

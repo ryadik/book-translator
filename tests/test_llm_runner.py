@@ -2,12 +2,13 @@
 
 run_gemini() is a thin subprocess wrapper tested implicitly via integration tests.
 """
+import json
 import subprocess
 from typing import Any
 import pytest
 from unittest.mock import patch, MagicMock
 
-from book_translator.llm_runner import run_ollama, run_qwen, run_llm, check_ollama_connection, check_qwen_binary
+from book_translator.llm_runner import run_ollama, run_qwen, run_llm, check_ollama_connection, check_qwen_binary, check_gemini_binary
 from book_translator.rate_limiter import RateLimiter
 
 
@@ -156,7 +157,9 @@ def _qwen_kwargs(**overrides) -> Any:
 class TestRunQwen:
     def _mock_proc(self, stdout: str = "translated text", returncode: int = 0):
         proc = MagicMock()
-        proc.communicate.return_value = (stdout, "")
+        # run_qwen calls _extract_qwen_response which expects qwen-code JSON array format
+        payload = json.dumps([{"type": "result", "result": stdout, "is_error": False}])
+        proc.communicate.return_value = (payload, "")
         proc.returncode = returncode
         return proc
 
@@ -173,10 +176,12 @@ class TestRunQwen:
         cmd = mock_popen.call_args[0][0]
         assert cmd[0] == "qwen"
         assert "-m" in cmd and "qwen-max" in cmd
-        assert "--output-format" in cmd and "json" in cmd
         assert "--approval-mode" in cmd and "yolo" in cmd
-        # Must NOT contain gemini's '-p' trick
-        assert "-p" not in cmd
+        # Headless stdin mode: -p ' ' required (same as gemini-cli)
+        assert "-p" in cmd
+        # Always uses --output-format json regardless of output_format kwarg
+        assert "--output-format" in cmd
+        assert cmd[cmd.index("--output-format") + 1] == "json"
 
     def test_prompt_passed_via_stdin_not_args(self):
         """Prompt must go to stdin, not appear in the command array."""
@@ -190,6 +195,16 @@ class TestRunQwen:
 
     def test_raises_called_process_error_on_nonzero_exit(self):
         proc = self._mock_proc(returncode=1)
+        with patch("book_translator.llm_runner.subprocess.Popen", return_value=proc):
+            with pytest.raises(subprocess.CalledProcessError):
+                run_qwen(**_qwen_kwargs())  # type: ignore[arg-type]
+
+    def test_raises_called_process_error_on_is_error_result(self):
+        """run_qwen raises CalledProcessError when qwen-code signals is_error=True."""
+        payload = json.dumps([{"type": "result", "result": "error msg", "is_error": True}])
+        proc = MagicMock()
+        proc.communicate.return_value = (payload, "")
+        proc.returncode = 0
         with patch("book_translator.llm_runner.subprocess.Popen", return_value=proc):
             with pytest.raises(subprocess.CalledProcessError):
                 run_qwen(**_qwen_kwargs())  # type: ignore[arg-type]
@@ -211,6 +226,26 @@ class TestRunQwen:
                 with pytest.raises(Exception):
                     run_qwen(**_qwen_kwargs(retry_attempts=3))  # type: ignore[arg-type]
             # Popen must never be called — cancellation fires before subprocess spawn
+            mock_popen.assert_not_called()
+        finally:
+            runner_mod._cancelled.clear()
+
+    def test_cancel_inside_rate_limiter_prevents_process_creation(self):
+        """_cancelled set while holding rate_limiter must still prevent Popen (second guard)."""
+        import book_translator.llm_runner as runner_mod
+
+        original_enter = runner_mod.RateLimiter.__enter__
+
+        def _cancel_on_enter(self_rl):
+            runner_mod._cancelled.set()
+            return original_enter(self_rl)
+
+        proc = self._mock_proc()
+        try:
+            with patch("book_translator.llm_runner.subprocess.Popen", return_value=proc) as mock_popen, \
+                 patch.object(runner_mod.RateLimiter, "__enter__", _cancel_on_enter):
+                with pytest.raises(Exception):
+                    run_qwen(**_qwen_kwargs(retry_attempts=1))  # type: ignore[arg-type]
             mock_popen.assert_not_called()
         finally:
             runner_mod._cancelled.clear()
@@ -345,3 +380,31 @@ class TestCheckOllamaConnection:
         mock_resp.json.return_value = {"models": []}
         with patch("book_translator.llm_runner._requests.get", return_value=mock_resp):
             check_ollama_connection("http://localhost:11434", [])
+
+    def test_passes_when_model_name_lacks_tag_and_server_returns_latest(self):
+        """Config says 'qwen3', Ollama stores it as 'qwen3:latest' — must not raise."""
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"models": [{"name": "qwen3:latest"}]}
+        with patch("book_translator.llm_runner._requests.get", return_value=mock_resp):
+            check_ollama_connection("http://localhost:11434", ["qwen3"])  # no tag in config
+
+    def test_raises_when_model_tag_wrong(self):
+        """Config says 'qwen3:9b' but only 'qwen3:8b' is installed."""
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"models": [{"name": "qwen3:8b"}]}
+        with patch("book_translator.llm_runner._requests.get", return_value=mock_resp):
+            with pytest.raises(RuntimeError, match="qwen3:9b"):
+                check_ollama_connection("http://localhost:11434", ["qwen3:9b"])
+
+
+class TestCheckGeminiBinary:
+    def test_passes_when_binary_found(self):
+        with patch("book_translator.llm_runner.shutil.which", return_value="/usr/local/bin/gemini"):
+            check_gemini_binary()  # should not raise
+
+    def test_raises_runtime_error_when_binary_missing(self):
+        with patch("book_translator.llm_runner.shutil.which", return_value=None):
+            with pytest.raises(RuntimeError, match="gemini"):
+                check_gemini_binary()

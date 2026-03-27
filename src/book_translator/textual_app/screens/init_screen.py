@@ -7,6 +7,7 @@ import types
 from importlib import resources
 from pathlib import Path
 
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
@@ -145,6 +146,19 @@ STYLE_GUIDE_TEMPLATE = '''## Стайлгайд перевода
 '''
 
 
+# (backend_id, display_label, binary_name)
+_BACKENDS: list[tuple[str, str, str]] = [
+    ("gemini", "Gemini (облачный)",  "gemini"),
+    ("qwen",   "Qwen (облачный)",    "qwen"),
+    ("ollama", "Ollama (локальный)", "ollama"),
+]
+
+
+def _available_backends() -> list[tuple[str, str]]:
+    """Return (backend_id, label) pairs for backends whose binary is in PATH."""
+    return [(bid, label) for bid, label, binary in _BACKENDS if shutil.which(binary) is not None]
+
+
 def _find_bundled_style_guide(source_lang: str, target_lang: str) -> Path | None:
     """Find bundled style guide for the given language pair."""
     style_guides_ref = resources.files('book_translator') / 'data' / 'style_guides'
@@ -239,10 +253,19 @@ class InitScreen(Screen):
             yield Input(placeholder="ru", id="input-target-lang", value="ru")
 
             yield Label("LLM-бэкенд:", classes="field-label")
-            with RadioSet(id="backend-select"):
-                yield RadioButton("Gemini (облачный)", value=True, id="radio-gemini")
-                yield RadioButton("Qwen (облачный)", id="radio-qwen")
-                yield RadioButton("Ollama (локальный)", id="radio-ollama")
+            available = _available_backends()
+            if available:
+                with RadioSet(id="backend-select"):
+                    for i, (bid, label) in enumerate(available):
+                        yield RadioButton(label, value=(i == 0), id=f"radio-{bid}")
+            else:
+                yield Label(
+                    "[yellow]Не найдено ни одного LLM-бэкенда. Установите хотя бы один:\n"
+                    "  • Gemini: npm install -g @google/gemini-cli\n"
+                    "  • Qwen:   npm install -g qwen-code\n"
+                    "  • Ollama: https://ollama.ai[/yellow]",
+                    id="no-backends-warning",
+                )
 
             yield Label("", id="init-status")
             with Horizontal(id="init-buttons"):
@@ -288,13 +311,19 @@ class InitScreen(Screen):
         name = self.query_one("#input-name", Input).value.strip()
         source_lang = self.query_one("#input-source-lang", Input).value.strip() or "ja"
         target_lang = self.query_one("#input-target-lang", Input).value.strip() or "ru"
-        if self.query_one("#radio-ollama", RadioButton).value:
-            backend = "ollama"
-        elif self.query_one("#radio-qwen", RadioButton).value:
-            backend = "qwen"
-        else:
-            backend = "gemini"
         status_label = self.query_one("#init-status", Label)
+
+        # Determine selected backend — only rendered buttons exist in the DOM
+        backend: str | None = None
+        for bid, _label, _binary in _BACKENDS:
+            radios = self.query(f"#radio-{bid}")
+            if radios and radios.first(RadioButton).value:
+                backend = bid
+                break
+
+        if backend is None:
+            status_label.update("[red]Установите хотя бы один LLM-бэкенд и перезапустите программу[/red]")
+            return
 
         # Determine series name
         if use_current_dir:

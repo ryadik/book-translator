@@ -28,6 +28,14 @@ def apply_diffs(
             skipped += 1
             continue
 
+        if isinstance(chunk_idx, str):
+            try:
+                chunk_idx = int(chunk_idx)
+            except (ValueError, TypeError):
+                system_logger.warning(f"Chunk index invalid type: {chunk_idx!r}")
+                skipped += 1
+                continue
+
         if not isinstance(chunk_idx, int):
             system_logger.warning(f"Chunk index invalid type: {chunk_idx!r}")
             skipped += 1

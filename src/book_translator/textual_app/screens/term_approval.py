@@ -41,7 +41,12 @@ class _EditTermModal(ModalScreen):
             self.dismiss(None)
 
     def on_key(self, event) -> None:
-        if event.key == "enter":
+        # Only dismiss on Enter when an Input field is focused.
+        # If a Button is focused, pressing Enter fires Button.Pressed which
+        # calls on_button_pressed → dismiss(). Handling Enter here too causes
+        # a double-dismiss: the second pop_screen() removes TermApprovalScreen
+        # without calling the done_event callback, deadlocking the orchestrator.
+        if event.key == "enter" and isinstance(self.focused, Input):
             self.dismiss({
                 "target": self.query_one("#input-target", Input).value.strip(),
                 "comment": self.query_one("#input-comment", Input).value.strip(),

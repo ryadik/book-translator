@@ -640,3 +640,60 @@ def test_failed_global_proofreading_updates_manifest_and_keeps_output_absent(moc
     assert manifest['status'] == 'failed'
     assert manifest['current_stage'] == 'global_proofreading'
     assert 'Глобальная вычитка' in manifest['error']
+
+
+# ── CancellationError handling ─────────────────────────────────────────────────
+
+@patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=[{'id': 0, 'text': 'テスト。'}])
+def test_run_translation_process_cancellation_returns_false_not_raises(mock_splitter, tmp_path):
+    """CancellationError from the UI must be caught cleanly — returns False, never raises."""
+    from contextlib import contextmanager
+    from book_translator.exceptions import CancellationError
+
+    class _CancellingUI:
+        @contextmanager
+        def progress(self, label, total):
+            raise CancellationError("user cancelled")
+            yield  # never reached; satisfies @contextmanager  # noqa: unreachable
+
+        def confirm(self, prompt, default=False):
+            return default
+
+        def approve_terms(self, *args, **kwargs):
+            return 0
+
+    series_root, chapter_path = _make_mock_series(tmp_path)
+
+    result = orchestrator.run_translation_process(
+        series_root, chapter_path, ui=_CancellingUI()
+    )
+    assert result is False, "Cancelled run must return False, not raise"
+
+
+@patch('book_translator.orchestrator.chapter_splitter.split_chapter_intelligently', return_value=[{'id': 0, 'text': 'テスト。'}])
+def test_run_translation_process_cancellation_releases_lock(mock_splitter, tmp_path):
+    """Lock file must be released even when translation is cancelled via CancellationError."""
+    from contextlib import contextmanager
+    from book_translator.exceptions import CancellationError
+
+    class _CancellingUI:
+        @contextmanager
+        def progress(self, label, total):
+            raise CancellationError("user cancelled")
+            yield  # noqa: unreachable
+
+        def confirm(self, prompt, default=False):
+            return default
+
+        def approve_terms(self, *args, **kwargs):
+            return 0
+
+    series_root, chapter_path = _make_mock_series(tmp_path)
+
+    orchestrator.run_translation_process(
+        series_root, chapter_path, ui=_CancellingUI()
+    )
+
+    volume_paths = orchestrator.path_resolver.get_volume_paths(series_root, 'volume-01')
+    lock_file = volume_paths.state_dir / '.lock.test-chapter'
+    assert not lock_file.exists(), "Lock file must be released after cancellation"

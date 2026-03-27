@@ -39,7 +39,6 @@ class BookTranslatorApp(App):
     CSS_PATH = Path(__file__).parent / "app.tcss"
     TITLE = "book-translator"
     BINDINGS = [
-        Binding("ctrl+d", "toggle_dark", "Тема", key_display="Ctrl+D", priority=True),
         Binding("ctrl+q", "quit", "Выход", show=False, priority=True),
     ]
 
