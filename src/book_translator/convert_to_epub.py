@@ -5,6 +5,7 @@ Converts translated text files to EPUB format using ebooklib.
 """
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 try:
@@ -57,12 +58,12 @@ def convert_txt_to_epub(
         book.add_author(author)
 
     # Build HTML chapter content
-    html_paragraphs = '\n'.join(f'<p>{para}</p>' for para in paragraphs)
+    html_paragraphs = '\n'.join(f'<p>{html.escape(para)}</p>' for para in paragraphs)
     html_content = f'''<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
-  <title>{title}</title>
+  <title>{html.escape(title)}</title>
   <meta charset="utf-8"/>
 </head>
 <body>
