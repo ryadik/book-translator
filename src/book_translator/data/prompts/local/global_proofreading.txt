@@ -38,4 +38,5 @@ Rules:
 3. No leading/trailing whitespace in `find` unless required for uniqueness.
 4. If no corrections needed, return: []
 5. Output ONLY the JSON array. No markdown, no explanations.
+6. CRITICAL — CHARACTER FIDELITY: Copy `find` character-for-character from content_target. Hyphen U+002D `-`, en-dash U+2013 `–`, em-dash U+2014 `—`, and box-drawing U+2500 `─` are distinct characters. Never substitute one for another — any mismatch causes the diff to be silently rejected.
 </output_format>

@@ -297,6 +297,12 @@ def _run_global_proofreading(
             system_logger.warning(f"[Orchestrator] Глобальная вычитка вернула не список. Пропуск. Ответ: {stdout[:200]}")
             return chunks, False
 
+        # Unwrap [[{...}]] → [{...}]: json_repair sometimes wraps a list in another list
+        # when the model includes extra text around the JSON.
+        if diffs and isinstance(diffs[0], list):
+            diffs = [item for sublist in diffs for item in sublist if isinstance(item, dict)]
+            system_logger.warning("[Orchestrator] Глобальная вычитка вернула вложенный список — выполнена распаковка.")
+
         system_logger.info(f"[Orchestrator] Получено {len(diffs)} правок от глобальной вычитки.")
         updated_chunks, applied, skipped = proofreader.apply_diffs(chunks, diffs)
         system_logger.info(f"[Orchestrator] Правки применены: {applied}, пропущено: {skipped}.")
