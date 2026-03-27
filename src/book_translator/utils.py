@@ -64,7 +64,7 @@ def parse_llm_json(raw: str) -> Any:
             raise ValueError(f"Не удалось распарсить JSON из ответа LLM: {e}\nОтвет: {raw[:200]!r}")
 
     # Обработка обёртки gemini-cli: {"response": "..."}
-    if isinstance(parsed, dict) and "response" in parsed and len(parsed) <= 3:
+    if isinstance(parsed, dict) and "response" in parsed and isinstance(parsed.get("response"), str):
         response_text = parsed["response"]
         if isinstance(response_text, str):
             if not response_text.strip():

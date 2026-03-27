@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from unittest.mock import patch, MagicMock
 
-from book_translator.llm_runner import run_ollama, run_qwen, run_llm, check_ollama_connection, check_qwen_binary
+from book_translator.llm_runner import run_ollama, run_qwen, run_llm, check_ollama_connection, check_qwen_binary, check_gemini_binary
 from book_translator.rate_limiter import RateLimiter
 
 
@@ -215,6 +215,26 @@ class TestRunQwen:
         finally:
             runner_mod._cancelled.clear()
 
+    def test_cancel_inside_rate_limiter_prevents_process_creation(self):
+        """_cancelled set while holding rate_limiter must still prevent Popen (second guard)."""
+        import book_translator.llm_runner as runner_mod
+
+        original_enter = runner_mod.RateLimiter.__enter__
+
+        def _cancel_on_enter(self_rl):
+            runner_mod._cancelled.set()
+            return original_enter(self_rl)
+
+        proc = self._mock_proc()
+        try:
+            with patch("book_translator.llm_runner.subprocess.Popen", return_value=proc) as mock_popen, \
+                 patch.object(runner_mod.RateLimiter, "__enter__", _cancel_on_enter):
+                with pytest.raises(Exception):
+                    run_qwen(**_qwen_kwargs(retry_attempts=1))  # type: ignore[arg-type]
+            mock_popen.assert_not_called()
+        finally:
+            runner_mod._cancelled.clear()
+
 
 class TestCheckQwenBinary:
     def test_passes_when_binary_found(self):
@@ -345,3 +365,31 @@ class TestCheckOllamaConnection:
         mock_resp.json.return_value = {"models": []}
         with patch("book_translator.llm_runner._requests.get", return_value=mock_resp):
             check_ollama_connection("http://localhost:11434", [])
+
+    def test_passes_when_model_name_lacks_tag_and_server_returns_latest(self):
+        """Config says 'qwen3', Ollama stores it as 'qwen3:latest' — must not raise."""
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"models": [{"name": "qwen3:latest"}]}
+        with patch("book_translator.llm_runner._requests.get", return_value=mock_resp):
+            check_ollama_connection("http://localhost:11434", ["qwen3"])  # no tag in config
+
+    def test_raises_when_model_tag_wrong(self):
+        """Config says 'qwen3:9b' but only 'qwen3:8b' is installed."""
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"models": [{"name": "qwen3:8b"}]}
+        with patch("book_translator.llm_runner._requests.get", return_value=mock_resp):
+            with pytest.raises(RuntimeError, match="qwen3:9b"):
+                check_ollama_connection("http://localhost:11434", ["qwen3:9b"])
+
+
+class TestCheckGeminiBinary:
+    def test_passes_when_binary_found(self):
+        with patch("book_translator.llm_runner.shutil.which", return_value="/usr/local/bin/gemini"):
+            check_gemini_binary()  # should not raise
+
+    def test_raises_runtime_error_when_binary_missing(self):
+        with patch("book_translator.llm_runner.shutil.which", return_value=None):
+            with pytest.raises(RuntimeError, match="gemini"):
+                check_gemini_binary()

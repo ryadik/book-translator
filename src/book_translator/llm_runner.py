@@ -11,6 +11,7 @@ Provides:
   cancel_all() — abort all active LLM calls (called from UI cancel handler)
   reset_cancellation() — clear cancellation state before a new translation run
 """
+import json as _json
 import re as _re
 import shutil
 import subprocess
@@ -119,17 +120,23 @@ def run_gemini(
         system_logger.info(f"[LLMRunner] Запущен воркер [id: {worker_id}] для: {label}")
         try:
             with rate_limiter:
-                proc = subprocess.Popen(
-                    command,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    encoding='utf-8',
-                    cwd=_get_subprocess_cwd(),
-                )
-            with _registry_lock:
-                _active_processes.append(proc)
+                # Повторная проверка отмены после ожидания ограничителя скорости,
+                # чтобы устранить гонку между созданием процесса и его регистрацией.
+                if _cancelled.is_set():
+                    raise _LLMCancelledError("LLM call cancelled")
+                with _registry_lock:
+                    if _cancelled.is_set():
+                        raise _LLMCancelledError("LLM call cancelled")
+                    proc = subprocess.Popen(
+                        command,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        encoding='utf-8',
+                        cwd=_get_subprocess_cwd(),
+                    )
+                    _active_processes.append(proc)
             try:
                 try:
                     stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
@@ -214,17 +221,23 @@ def run_qwen(
         system_logger.info(f"[LLMRunner] Запущен воркер [id: {worker_id}] для: {label}")
         try:
             with rate_limiter:
-                proc = subprocess.Popen(
-                    command,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    encoding='utf-8',
-                    cwd=_get_subprocess_cwd(),
-                )
-            with _registry_lock:
-                _active_processes.append(proc)
+                # Повторная проверка отмены после ожидания ограничителя скорости,
+                # чтобы устранить гонку между созданием процесса и его регистрацией.
+                if _cancelled.is_set():
+                    raise _LLMCancelledError("LLM call cancelled")
+                with _registry_lock:
+                    if _cancelled.is_set():
+                        raise _LLMCancelledError("LLM call cancelled")
+                    proc = subprocess.Popen(
+                        command,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        encoding='utf-8',
+                        cwd=_get_subprocess_cwd(),
+                    )
+                    _active_processes.append(proc)
             try:
                 try:
                     stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
@@ -251,6 +264,7 @@ def run_qwen(
             raise
 
     stdout = _execute()
+    stdout = _re.sub(r'<think>.*?</think>', '', stdout, flags=_re.DOTALL).strip()
     output_logger.info(f"[{worker_id}] --- SUCCESSFUL OUTPUT FROM: {label} ---\n{stdout}\n")
     return stdout
 
@@ -428,6 +442,19 @@ def run_llm(
     )
 
 
+def check_gemini_binary() -> None:
+    """Verify that gemini-cli is available in PATH.
+
+    Raises:
+        RuntimeError: If 'gemini' binary is not found.
+    """
+    if shutil.which('gemini') is None:
+        raise RuntimeError(
+            "Команда 'gemini' не найдена в PATH. "
+            "Установите gemini-cli: npm install -g @google/gemini-cli"
+        )
+
+
 def check_qwen_binary() -> None:
     """Verify that the qwen-code CLI is available in PATH.
 
@@ -439,6 +466,11 @@ def check_qwen_binary() -> None:
             "Команда 'qwen' не найдена в PATH. "
             "Установите qwen-code: npm install -g qwen-code"
         )
+
+
+def _normalize_ollama_model(name: str) -> str:
+    """Normalize an Ollama model name: append ':latest' if no tag is specified."""
+    return name if ':' in name else f"{name}:latest"
 
 
 def check_ollama_connection(ollama_url: str, required_models: list[str]) -> None:
@@ -463,8 +495,12 @@ def check_ollama_connection(ollama_url: str, required_models: list[str]) -> None
     except Exception as e:
         raise RuntimeError(f"Ошибка при подключении к Ollama ({ollama_url}): {e}")
 
-    available = {m["name"] for m in response.json().get("models", [])}
-    missing = [m for m in required_models if m not in available]
+    # Normalize names so that 'qwen3' matches 'qwen3:latest' returned by the server
+    available_normalized = {
+        _normalize_ollama_model(m["name"])
+        for m in response.json().get("models", [])
+    }
+    missing = [m for m in required_models if _normalize_ollama_model(m) not in available_normalized]
     if missing:
         pull_cmds = "\n".join(f"  ollama pull {m}" for m in missing)
         raise RuntimeError(
