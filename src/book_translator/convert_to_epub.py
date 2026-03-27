@@ -59,17 +59,13 @@ def convert_txt_to_epub(
 
     # Build HTML chapter content
     html_paragraphs = '\n'.join(f'<p>{html.escape(para)}</p>' for para in paragraphs)
-    html_content = f'''<?xml version="1.0" encoding="utf-8"?>
-<!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head>
-  <title>{html.escape(title)}</title>
-  <meta charset="utf-8"/>
-</head>
-<body>
-{html_paragraphs}
-</body>
-</html>'''
+    html_content = (
+        '<html xmlns="http://www.w3.org/1999/xhtml"'
+        ' xmlns:epub="http://www.idpf.org/2007/ops">'
+        f'<head><title>{html.escape(title)}</title></head>'
+        f'<body>{html_paragraphs}</body>'
+        '</html>'
+    )
 
     # Create chapter
     chapter = epub.EpubHtml(
