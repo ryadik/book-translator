@@ -167,6 +167,28 @@ def run_gemini(
     return stdout
 
 
+def _extract_qwen_response(raw: str) -> tuple[str, bool]:
+    """Extract the LLM response text from qwen-code's --output-format json output.
+
+    qwen-code returns a JSON array of message objects. The actual LLM response
+    is in the final {"type": "result", "result": "..."} entry.
+
+    Returns:
+        (response_text, is_error) — response_text is the LLM's answer;
+        is_error is True when qwen-code signals an error condition.
+    """
+    try:
+        messages = _json.loads(raw)
+        if isinstance(messages, list):
+            for msg in reversed(messages):
+                if isinstance(msg, dict) and msg.get("type") == "result":
+                    return str(msg.get("result", "")), bool(msg.get("is_error", False))
+    except (_json.JSONDecodeError, TypeError, ValueError):
+        pass
+    # Fallback: raw output could not be parsed — return as-is
+    return raw, False
+
+
 def run_qwen(
     prompt: str,
     model_name: str,
@@ -179,16 +201,18 @@ def run_qwen(
     worker_id: str,
     label: str,
 ) -> str:
-    """Run qwen-code CLI with the given prompt and return stdout.
+    """Run qwen-code CLI with the given prompt and return the LLM response text.
 
-    qwen-code is a fork of gemini-cli with an identical stdin/stdout interface.
-    Differences from run_gemini(): binary is 'qwen'; headless mode is triggered
-    via '--approval-mode yolo' instead of '-p " "'.
+    qwen-code uses the same stdin + -p ' ' headless pattern as gemini-cli.
+    Key difference: --output-format json returns a JSON array of message objects,
+    not a {"response": "..."} wrapper. We extract the result from the final
+    {"type": "result", "result": "..."} entry.
 
     Args:
         prompt: The full prompt string to send via stdin.
         model_name: Qwen model identifier (e.g. 'qwen-plus').
-        output_format: 'text' or 'json'.
+        output_format: 'text' or 'json' (used by caller to decide how to parse;
+            the CLI always uses --output-format json for structured extraction).
         rate_limiter: Shared rate limiter instance.
         timeout: Subprocess timeout in seconds.
         retry_attempts: Max retry attempts on CalledProcessError/TimeoutExpired.
@@ -198,15 +222,16 @@ def run_qwen(
         label: Human-readable label for log messages (e.g. 'chunk_3').
 
     Returns:
-        stdout string from qwen-code.
+        LLM response text extracted from qwen-code output.
 
     Raises:
-        subprocess.CalledProcessError: After exhausting retries.
+        subprocess.CalledProcessError: After exhausting retries or on qwen error.
         subprocess.TimeoutExpired: After exhausting retries.
     """
-    # Pass prompt via stdin to avoid ARG_MAX limits and prevent prompt leakage in `ps aux`.
-    # '--approval-mode yolo' triggers non-interactive (headless) mode in qwen-code.
-    command = ['qwen', '-m', model_name, '--output-format', output_format, '--approval-mode', 'yolo']
+    # -p ' ' triggers headless (non-interactive) mode and makes qwen read stdin,
+    # identical to how gemini-cli works. --output-format json gives a parseable
+    # JSON array from which we extract the actual LLM response text.
+    command = ['qwen', '-m', model_name, '-p', ' ', '--output-format', 'json', '--approval-mode', 'yolo']
     input_logger.info(f"[{worker_id}] --- PROMPT FOR: {label} ---\n{prompt}\n")
 
     @retry(
@@ -221,8 +246,6 @@ def run_qwen(
         system_logger.info(f"[LLMRunner] Запущен воркер [id: {worker_id}] для: {label}")
         try:
             with rate_limiter:
-                # Повторная проверка отмены после ожидания ограничителя скорости,
-                # чтобы устранить гонку между созданием процесса и его регистрацией.
                 if _cancelled.is_set():
                     raise _LLMCancelledError("LLM call cancelled")
                 with _registry_lock:
@@ -263,10 +286,15 @@ def run_qwen(
         except subprocess.TimeoutExpired:
             raise
 
-    stdout = _execute()
-    stdout = _re.sub(r'<think>.*?</think>', '', stdout, flags=_re.DOTALL).strip()
-    output_logger.info(f"[{worker_id}] --- SUCCESSFUL OUTPUT FROM: {label} ---\n{stdout}\n")
-    return stdout
+    raw_stdout = _execute()
+    response_text, is_error = _extract_qwen_response(raw_stdout)
+    if is_error:
+        system_logger.error(f"[LLMRunner] Qwen вернул ошибку для {label}: {response_text[:300]}")
+        raise subprocess.CalledProcessError(1, command, raw_stdout, response_text)
+    # Strip any <think>...</think> reasoning tokens that some Qwen models emit.
+    response_text = _re.sub(r'<think>.*?</think>', '', response_text, flags=_re.DOTALL).strip()
+    output_logger.info(f"[{worker_id}] --- SUCCESSFUL OUTPUT FROM: {label} ---\n{response_text}\n")
+    return response_text
 
 
 def run_ollama(

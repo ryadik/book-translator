@@ -2,6 +2,7 @@
 
 run_gemini() is a thin subprocess wrapper tested implicitly via integration tests.
 """
+import json
 import subprocess
 from typing import Any
 import pytest
@@ -156,7 +157,9 @@ def _qwen_kwargs(**overrides) -> Any:
 class TestRunQwen:
     def _mock_proc(self, stdout: str = "translated text", returncode: int = 0):
         proc = MagicMock()
-        proc.communicate.return_value = (stdout, "")
+        # run_qwen calls _extract_qwen_response which expects qwen-code JSON array format
+        payload = json.dumps([{"type": "result", "result": stdout, "is_error": False}])
+        proc.communicate.return_value = (payload, "")
         proc.returncode = returncode
         return proc
 
@@ -173,10 +176,12 @@ class TestRunQwen:
         cmd = mock_popen.call_args[0][0]
         assert cmd[0] == "qwen"
         assert "-m" in cmd and "qwen-max" in cmd
-        assert "--output-format" in cmd and "json" in cmd
         assert "--approval-mode" in cmd and "yolo" in cmd
-        # Must NOT contain gemini's '-p' trick
-        assert "-p" not in cmd
+        # Headless stdin mode: -p ' ' required (same as gemini-cli)
+        assert "-p" in cmd
+        # Always uses --output-format json regardless of output_format kwarg
+        assert "--output-format" in cmd
+        assert cmd[cmd.index("--output-format") + 1] == "json"
 
     def test_prompt_passed_via_stdin_not_args(self):
         """Prompt must go to stdin, not appear in the command array."""
@@ -190,6 +195,16 @@ class TestRunQwen:
 
     def test_raises_called_process_error_on_nonzero_exit(self):
         proc = self._mock_proc(returncode=1)
+        with patch("book_translator.llm_runner.subprocess.Popen", return_value=proc):
+            with pytest.raises(subprocess.CalledProcessError):
+                run_qwen(**_qwen_kwargs())  # type: ignore[arg-type]
+
+    def test_raises_called_process_error_on_is_error_result(self):
+        """run_qwen raises CalledProcessError when qwen-code signals is_error=True."""
+        payload = json.dumps([{"type": "result", "result": "error msg", "is_error": True}])
+        proc = MagicMock()
+        proc.communicate.return_value = (payload, "")
+        proc.returncode = 0
         with patch("book_translator.llm_runner.subprocess.Popen", return_value=proc):
             with pytest.raises(subprocess.CalledProcessError):
                 run_qwen(**_qwen_kwargs())  # type: ignore[arg-type]
