@@ -51,6 +51,7 @@ class TranslationScreen(Screen):
         Binding("c", "cancel_translation", "Отменить", priority=True),
         Binding("p", "pause_translation", "Пауза", priority=True),
         Binding("f", "focus_worker_filter", "Фильтр", show=False, priority=True),
+        Binding("ctrl+y", "copy_logs", "Копировать логи", show=False),
     ]
 
     def __init__(
@@ -140,7 +141,13 @@ class TranslationScreen(Screen):
         )
 
     def _run_orchestrator(self) -> None:
-        """Runs in a worker thread. Calls orchestrator synchronously."""
+        """Runs in a worker thread. Calls orchestrator synchronously.
+
+        `bridge` is captured at start to avoid a stale reference if
+        action_resume_translation() replaces self._bridge mid-flight.
+        Messages are only posted if this thread is still the active one.
+        """
+        bridge = self._bridge
         opt = self._options
         try:
             success = orchestrator.run_translation_process(
@@ -152,23 +159,23 @@ class TranslationScreen(Screen):
                 auto_docx=opt.get("auto_docx", None),
                 auto_epub=opt.get("auto_epub", None),
                 restart_stage=opt.get("restart_stage"),
-                ui=self._bridge,
+                ui=bridge,
                 log_handler=self._log_handler,
             )
-            if self._bridge:
-                self._bridge.mark_done()
-            self.post_message(
-                TranslationFinished(self._chapter_path.stem, success=success is not False)
-            )
+            if bridge and bridge is self._bridge:
+                bridge.mark_done()
+                self.post_message(
+                    TranslationFinished(self._chapter_path.stem, success=success is not False)
+                )
         except Exception as e:
-            if self._bridge:
-                self._bridge.mark_done()
-            tb = traceback.format_exc()
-            self.post_message(
-                TranslationFinished(self._chapter_path.stem, success=False)
-            )
-            self.post_message(UIMessage(f"[bold]Ошибка:[/bold] {e}", level="error"))
-            self.post_message(UIMessage(tb, level="error"))
+            if bridge and bridge is self._bridge:
+                bridge.mark_done()
+                tb = traceback.format_exc()
+                self.post_message(
+                    TranslationFinished(self._chapter_path.stem, success=False)
+                )
+                self.post_message(UIMessage(f"[bold]Ошибка:[/bold] {e}", level="error"))
+                self.post_message(UIMessage(tb, level="error"))
 
     # ── Message handlers ──────────────────────────────────────────────────────
 
@@ -319,6 +326,16 @@ class TranslationScreen(Screen):
 
     def action_focus_worker_filter(self) -> None:
         self.query_one("#worker-filter", Select).focus()
+
+    def action_copy_logs(self) -> None:
+        """Copy visible log records to the system clipboard."""
+        lines = [
+            str(r.get("text") or "")
+            for r in self._log_records
+            if self._matches_filter(r)
+        ]
+        self.app.copy_to_clipboard("\n".join(lines))
+        self.notify("Логи скопированы в буфер обмена")
 
     def on_unmount(self) -> None:
         """Ensure translation is cancelled if screen is removed."""

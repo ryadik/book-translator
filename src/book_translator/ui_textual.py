@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from book_translator.textual_app.app import BookTranslatorApp
 
 from book_translator import llm_runner as _llm_runner
+from book_translator.exceptions import CancellationError
 from book_translator.textual_app.messages import (
     ConfirmRequest,
     ProgressAdvanced,
@@ -30,8 +31,6 @@ from book_translator.textual_app.messages import (
 )
 
 
-class CancellationError(Exception):
-    """Raised when the user cancels a running translation."""
 
 
 class TextualProgressHandle:
@@ -137,9 +136,9 @@ class TextualBridge:
         # post_message на app (там зарегистрирован on_confirm_request)
         self._screen.app.post_message(ConfirmRequest(prompt, default, _callback))
 
-        # Ждём ответа с таймаутом, периодически проверяя отмену
+        # Ждём ответа с таймаутом, периодически проверяя отмену и паузу
         while not response_event.wait(timeout=1.0):
-            if self._cancelled.is_set():
+            if self._cancelled.is_set() or self._is_paused:
                 return default
 
         self._check_cancelled()
@@ -152,9 +151,9 @@ class TextualBridge:
         ready_event = threading.Event()
         self._screen.app.post_message(WaitForUserRequest(message, ready_event))
 
-        # Ждём с таймаутом, периодически проверяя отмену
+        # Ждём с таймаутом, периодически проверяя отмену и паузу
         while not ready_event.wait(timeout=1.0):
-            if self._cancelled.is_set():
+            if self._cancelled.is_set() or self._is_paused:
                 return
 
     # ── Прогресс ─────────────────────────────────────────────────────────────
@@ -203,9 +202,9 @@ class TextualBridge:
             ),
         )
 
-        # Ждём с таймаутом, периодически проверяя отмену
+        # Ждём с таймаутом, периодически проверяя отмену и паузу
         while not done_event.wait(timeout=1.0):
-            if self._cancelled.is_set():
+            if self._cancelled.is_set() or self._is_paused:
                 return 0
 
         return result[0] if result else 0

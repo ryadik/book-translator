@@ -23,7 +23,7 @@ from book_translator import path_resolver
 from book_translator import default_prompts
 from book_translator.rate_limiter import RateLimiter
 from book_translator.utils import parse_llm_json
-from book_translator.exceptions import TranslationLockedError
+from book_translator.exceptions import TranslationLockedError, CancellationError
 from book_translator import llm_runner
 
 
@@ -356,6 +356,8 @@ def _run_workers_pooled(
                         system_logger.info(f"[Orchestrator] Прогресс: ({completed_tasks_count}/{total_tasks})")
                     else:
                         all_successful = False
+                except CancellationError:
+                    raise  # не перехватывать — пользователь отменил/поставил на паузу
                 except Exception as e:
                     system_logger.critical(f"[Orchestrator] Неожиданная ошибка при обработке chunk_{chunk['chunk_index']}: {e}", exc_info=True)
                     all_successful = False
@@ -502,6 +504,8 @@ def run_translation_process(
         llm_runner.check_ollama_connection(ollama_url, required)
     elif backend == 'qwen':
         llm_runner.check_qwen_binary()
+    elif backend == 'gemini':
+        llm_runner.check_gemini_binary()
 
     # Handle restart_stage: reset pipeline to the requested stage
     if restart_stage and restart_stage in _STAGE_PENDING_STATUS:
@@ -809,6 +813,12 @@ def run_translation_process(
         _update_manifest(current_stage="complete", status=final_status)
         return True
 
+    except CancellationError:
+        # Пользователь отменил или поставил перевод на паузу — не ошибка, выходим чисто.
+        final_status = "cancelled"
+        _update_manifest(current_stage=current_stage, status=final_status)
+        system_logger.info("[Orchestrator] Перевод отменён пользователем.")
+        return False
     except TranslationLockedError:
         final_error = f"Обнаружена блокировка для главы '{chapter_name}'."
         final_status = "locked"

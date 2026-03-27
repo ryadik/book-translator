@@ -124,7 +124,12 @@ class BatchTranslationScreen(Screen):
         )
 
     def _run_batch_orchestrator(self) -> None:
-        """Runs in a worker thread. Processes chapters sequentially."""
+        """Runs in a worker thread. Processes chapters sequentially.
+
+        `bridge` is captured at start to avoid a stale reference if the bridge
+        is ever replaced (defensive copy; batch mode has no pause/resume).
+        """
+        bridge = self._bridge
         opt = self._options
 
         for idx, (chapter_path, series_root) in enumerate(self._chapters):
@@ -144,7 +149,7 @@ class BatchTranslationScreen(Screen):
                     auto_docx=opt.get("auto_docx", None),
                     auto_epub=opt.get("auto_epub", None),
                     restart_stage=opt.get("restart_stage"),
-                    ui=self._bridge,
+                    ui=bridge,
                     log_handler=self._log_handler,
                 )
 
@@ -162,8 +167,8 @@ class BatchTranslationScreen(Screen):
                 self.post_message(UIMessage(tb, level="error"))
                 # Continue with next chapter
 
-        if self._bridge:
-            self._bridge.mark_done()
+        if bridge:
+            bridge.mark_done()
 
     # ── Message handlers ──────────────────────────────────────────────────────
 

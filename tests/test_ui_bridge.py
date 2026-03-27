@@ -1,7 +1,10 @@
 import asyncio
 import json
+import threading
+import time
 from argparse import Namespace
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from textual.widgets import Button, DataTable, ProgressBar, Select, Static
 
@@ -90,7 +93,7 @@ def test_theme_choice_persists_between_sessions(tmp_path, monkeypatch):
     async def toggle_theme():
         async with app.run_test() as pilot:
             before = app.theme
-            await pilot.press("ctrl+d")
+            app.action_toggle_dark()
             await pilot.pause()
             assert app.theme != before
             await pilot.press("ctrl+q")
@@ -461,3 +464,68 @@ def test_live_log_record_flows_from_handler_through_app_to_translation_screen(tm
             assert "hello-live-log" in str(screen.query_one("#log-panel").lines[-1])
 
     _run(scenario())
+
+
+# ── TextualBridge unit tests ───────────────────────────────────────────────────
+
+def _make_bridge():
+    screen = MagicMock()
+    screen.app = MagicMock()
+    from book_translator.ui_textual import TextualBridge
+    return TextualBridge(screen)
+
+
+def test_bridge_confirm_returns_default_when_paused_mid_wait():
+    """confirm() must exit the poll loop when paused while waiting for user input."""
+    bridge = _make_bridge()
+    result = []
+
+    def _run():
+        result.append(bridge.confirm("Test?", default=True))
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    time.sleep(0.05)      # let thread enter the polling loop
+    bridge._is_paused = True
+    t.join(timeout=3.0)   # poll interval is 1s — should exit within 2 cycles
+
+    assert not t.is_alive(), "confirm() hung despite bridge being paused"
+    assert result == [True]
+
+
+def test_bridge_approve_terms_returns_zero_when_paused_mid_wait():
+    """approve_terms() must exit the poll loop when paused while waiting."""
+    bridge = _make_bridge()
+    result = []
+
+    def _run():
+        result.append(
+            bridge.approve_terms([], Path("/tmp/t.tsv"), Path("/tmp/t.db"), "ja", "ru")
+        )
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    time.sleep(0.05)
+    bridge._is_paused = True
+    t.join(timeout=3.0)
+
+    assert not t.is_alive(), "approve_terms() hung despite bridge being paused"
+    assert result == [0]
+
+
+def test_bridge_confirm_returns_default_when_cancelled_mid_wait():
+    """confirm() must also exit promptly when cancelled (not paused)."""
+    bridge = _make_bridge()
+    result = []
+
+    def _run():
+        result.append(bridge.confirm("Test?", default=False))
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    time.sleep(0.05)
+    bridge._cancelled.set()
+    t.join(timeout=3.0)
+
+    assert not t.is_alive(), "confirm() hung despite bridge being cancelled"
+    assert result == [False]
