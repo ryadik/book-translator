@@ -1,11 +1,10 @@
 """Log screen — persisted run viewer with parsed worker states."""
 from __future__ import annotations
 
-from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, RichLog, Select, Static
+from textual.widgets import DataTable, Footer, Header, Select, Static, TextArea
 
 from book_translator.log_viewer import (
     build_worker_status_rows,
@@ -73,7 +72,7 @@ class LogScreen(Screen):
         )
         yield Static("Статусы воркеров", id="worker-status-label")
         yield DataTable(id="worker-status-table", cursor_type="row")
-        yield RichLog(id="log-view", highlight=True, markup=False, wrap=True)
+        yield TextArea("", id="log-view", read_only=True)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -96,9 +95,7 @@ class LogScreen(Screen):
             self._records = []
             self._render_worker_table([])
             self.query_one("#run-summary", Static).update("Запусков пока нет.")
-            log = self.query_one("#log-view", RichLog)
-            log.clear()
-            log.write(Text("Для выбранной главы пока нет сохранённых запусков.", style="dim"))
+            self.query_one("#log-view", TextArea).load_text("Для выбранной главы пока нет сохранённых запусков.")
             return
         self._load_selected_run()
 
@@ -187,29 +184,17 @@ class LogScreen(Screen):
             return False
         return True
 
-    def _record_to_text(self, record: dict) -> Text:
-        line = format_record_line(record)
-        level = str(record.get("level") or "INFO")
-        if level in ("ERROR", "CRITICAL"):
-            return Text(line, style="red")
-        if level == "WARNING":
-            return Text(line, style="yellow")
-        if record.get("stream") in {"worker_input", "worker_output"}:
-            return Text(line, style="cyan")
-        return Text(line)
-
     def _render_log(self) -> None:
-        log = self.query_one("#log-view", RichLog)
-        log.clear()
         matched = False
+        lines = []
         filtered_records = self._filtered_records()
         self._render_worker_table(filtered_records)
         for record in filtered_records:
             if self._record_matches_filters(record):
-                log.write(self._record_to_text(record))
+                lines.append(format_record_line(record))
                 matched = True
-        if not matched:
-            log.write(Text("Для выбранного фильтра нет записей.", style="dim"))
+        text = "\n".join(lines) if matched else "Для выбранного фильтра нет записей."
+        self.query_one("#log-view", TextArea).load_text(text)
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "run-select":
