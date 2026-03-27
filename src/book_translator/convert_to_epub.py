@@ -46,6 +46,9 @@ def convert_txt_to_epub(
     # Split into paragraphs
     paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
 
+    if not paragraphs:
+        raise ValueError("Документ пуст — невозможно создать EPUB из пустого файла.")
+
     # Build EPUB
     book = epub.EpubBook()
     book.set_title(title)
