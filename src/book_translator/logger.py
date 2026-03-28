@@ -117,6 +117,9 @@ def setup_loggers(
     for logger_instance in [system_logger, input_logger, output_logger]:
         if logger_instance.hasHandlers():
             logger_instance.handlers.clear()
+        # Temporary NullHandler prevents "No handlers could be found" warnings
+        # during the window between clearing old handlers and adding new ones.
+        logger_instance.addHandler(logging.NullHandler())
 
     system_logger.setLevel(logging.DEBUG)
     input_logger.setLevel(logging.DEBUG)
