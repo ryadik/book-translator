@@ -20,22 +20,41 @@ from functools import lru_cache
 from pathlib import Path
 
 import requests as _requests
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryCallState
 
+from book_translator.exceptions import CancellationError
 from book_translator.logger import system_logger, input_logger, output_logger
 from book_translator.rate_limiter import RateLimiter
 from book_translator.utils import find_tool_versions_dir
 
 
-class _LLMCancelledError(Exception):
-    """Raised internally to abort a cancelled LLM call without retrying."""
+class _LLMCancelledError(CancellationError):
+    """Raised internally to abort a cancelled LLM call without retrying.
+
+    Inherits CancellationError so that _run_single_worker's
+    ``except CancellationError: raise`` correctly propagates it instead of
+    swallowing it in the generic ``except Exception`` handler.
+    """
 
 
 # ── Module-level cancellation state ──────────────────────────────────────────
 # Shared across all threads; cancel_all() sets _cancelled and kills active calls.
+# LIFECYCLE: call reset_cancellation() before starting each translation run
+# (run_translation_process does this). Forgetting to call it means the next run
+# starts in a permanently cancelled state.
 _cancelled = _threading.Event()
 _registry_lock = _threading.Lock()
 _active_processes: list[subprocess.Popen] = []   # active gemini-cli / qwen-code subprocesses
+
+
+def _before_sleep_check_cancelled(retry_state: RetryCallState) -> None:
+    """Tenacity before_sleep hook: abort the retry wait if cancellation is set.
+
+    Without this, a cancelled call must wait the full exponential back-off
+    (default min 4 s) before the next attempt detects cancellation.
+    """
+    if _cancelled.is_set():
+        raise _LLMCancelledError("LLM call cancelled during retry wait")
 
 
 def cancel_all() -> None:
@@ -58,7 +77,15 @@ def cancel_all() -> None:
 
 
 def reset_cancellation() -> None:
-    """Clear cancellation state before starting a new translation run."""
+    """Clear cancellation state before starting a new translation run.
+
+    MUST be called at the very start of each translation run (before any LLM
+    calls are made). run_translation_process() calls this automatically.
+
+    Forgetting to call this after a cancellation/pause leaves _cancelled set,
+    which causes every subsequent LLM call to fail with _LLMCancelledError
+    immediately — making the entire run appear broken.
+    """
     _cancelled.clear()
 
 
@@ -110,6 +137,7 @@ def run_gemini(
         stop=stop_after_attempt(retry_attempts),
         wait=wait_exponential(multiplier=1, min=retry_wait_min, max=retry_wait_max),
         retry=retry_if_exception_type((subprocess.CalledProcessError, subprocess.TimeoutExpired)),
+        before_sleep=_before_sleep_check_cancelled,
         reraise=True,
     )
     def _execute() -> str:
@@ -238,6 +266,7 @@ def run_qwen(
         stop=stop_after_attempt(retry_attempts),
         wait=wait_exponential(multiplier=1, min=retry_wait_min, max=retry_wait_max),
         retry=retry_if_exception_type((subprocess.CalledProcessError, subprocess.TimeoutExpired)),
+        before_sleep=_before_sleep_check_cancelled,
         reraise=True,
     )
     def _execute() -> str:
