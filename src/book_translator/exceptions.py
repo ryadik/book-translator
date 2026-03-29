@@ -6,3 +6,7 @@ from __future__ import annotations
 
 class TranslationLockedError(RuntimeError):
     """Raised when a translation lock file is found and --resume is not set."""
+
+
+class CancellationError(Exception):
+    """Raised when the user cancels or pauses a running translation."""

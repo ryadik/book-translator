@@ -119,17 +119,20 @@ def add_term(
     target_lang: str = 'ru',
     comment: str = '',
 ) -> None:
-    """Insert or replace a glossary term (upsert semantics).
-    
+    """Insert or update a glossary term (upsert semantics).
+
     If a term with the same (term_source, source_lang, target_lang) exists,
-    it is replaced entirely.
+    only term_target and comment are updated — id and created_at are preserved.
     """
     with connection(db_path) as conn:
         conn.execute(
             '''
-            INSERT OR REPLACE INTO glossary
+            INSERT INTO glossary
                 (term_source, term_target, source_lang, target_lang, comment)
             VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(term_source, source_lang, target_lang) DO UPDATE SET
+                term_target = excluded.term_target,
+                comment     = excluded.comment
             ''',
             (term_source, term_target, source_lang, target_lang, comment),
         )
@@ -168,13 +171,22 @@ def add_chunk(
     content_target: str | None = None,
     status: str = 'discovery_pending',
 ) -> None:
-    """Insert or replace a chunk (upsert semantics)."""
+    """Insert or update a chunk (upsert semantics).
+
+    If a chunk with the same (chapter_name, chunk_index) exists,
+    only content_source, content_target and status are updated — id is preserved.
+    """
     with connection(db_path) as conn:
         conn.execute(
             '''
-            INSERT OR REPLACE INTO chunks
+            INSERT INTO chunks
                 (chapter_name, chunk_index, content_source, content_target, status)
             VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(chapter_name, chunk_index) DO UPDATE SET
+                content_source = excluded.content_source,
+                content_target = excluded.content_target,
+                status         = excluded.status,
+                updated_at     = datetime('now')
             ''',
             (chapter_name, chunk_index, content_source, content_target, status),
         )
@@ -255,6 +267,30 @@ def batch_update_chunks_content(
                 'UPDATE chunks SET content_target = ?, status = ?, updated_at = datetime(\'now\') '
                 'WHERE chapter_name = ? AND chunk_index = ?',
                 (u['content_target'], u['status'], chapter_name, u['chunk_index']),
+            )
+        conn.commit()
+
+
+def batch_update_chunk_statuses(
+    db_path: Path,
+    chapter_name: str,
+    updates: list[tuple[int, str]],
+) -> None:
+    """Atomically update status for multiple chunks in a single transaction.
+
+    Args:
+        db_path: Path to chunks.db.
+        chapter_name: Chapter whose chunks are being updated.
+        updates: List of (chunk_index, new_status) tuples.
+
+    All updates commit together — partial application on crash is impossible.
+    """
+    with connection(db_path) as conn:
+        for chunk_index, new_status in updates:
+            conn.execute(
+                "UPDATE chunks SET status = ?, updated_at = datetime('now') "
+                "WHERE chapter_name = ? AND chunk_index = ?",
+                (new_status, chapter_name, chunk_index),
             )
         conn.commit()
 

@@ -52,12 +52,6 @@ def load_series_config(series_root: Path) -> dict:
     # Apply defaults
     config['series'].setdefault('source_lang', 'ja')
     config['series'].setdefault('target_lang', 'ru')
-    
-    if 'gemini_cli' not in config:
-        config['gemini_cli'] = {}
-    config['gemini_cli'].setdefault('model', 'gemini-2.5-pro')
-    config['gemini_cli'].setdefault('worker_timeout_seconds', 120)
-    config['gemini_cli'].setdefault('proofreading_timeout_seconds', 300)
 
     if 'retry' not in config:
         config['retry'] = {}
@@ -75,6 +69,41 @@ def load_series_config(series_root: Path) -> dict:
         config['workers'] = {}
     config['workers'].setdefault('max_concurrent', 50)
     config['workers'].setdefault('max_rps', 2.0)
+
+    if 'llm' not in config:
+        config['llm'] = {}
+    config['llm'].setdefault('backend', 'gemini')
+    config['llm'].setdefault('ollama_url', 'http://localhost:11434')
+
+    # Unified timeouts — configurable in [llm] section, backend-aware defaults.
+    # Ollama needs much longer timeouts because local inference is slow.
+    _backend = config['llm']['backend']
+    _default_worker_timeout = 600 if _backend == 'ollama' else 120
+    _default_proofread_timeout = 900 if _backend == 'ollama' else 300
+    config['llm'].setdefault('worker_timeout_seconds', _default_worker_timeout)
+    config['llm'].setdefault('proofreading_timeout_seconds', _default_proofread_timeout)
+
+    if 'models' not in config['llm']:
+        config['llm']['models'] = {}
+    config['llm']['models'].setdefault('discovery', 'qwen3:8b')
+    config['llm']['models'].setdefault('translation', 'qwen3:30b-a3b')
+    config['llm']['models'].setdefault('proofreading', 'qwen3:30b-a3b')
+    config['llm']['models'].setdefault('global_proofreading', 'qwen3:14b')
+
+    if 'options' not in config['llm']:
+        config['llm']['options'] = {}
+    config['llm']['options'].setdefault('temperature', 0.3)
+    config['llm']['options'].setdefault('num_ctx', 8192)
+    # Disable Qwen3 thinking mode by default — speeds up generation and avoids
+    # think-tokens leaking into translated text or JSON responses.
+    config['llm']['options'].setdefault('think', False)
+
+    if 'stage_temperature' not in config['llm']['options']:
+        config['llm']['options']['stage_temperature'] = {}
+    config['llm']['options']['stage_temperature'].setdefault('discovery', 0.1)
+    config['llm']['options']['stage_temperature'].setdefault('translation', 0.4)
+    config['llm']['options']['stage_temperature'].setdefault('proofreading', 0.3)
+    config['llm']['options']['stage_temperature'].setdefault('global_proofreading', 0.1)
 
     # Validate configuration values
     _validate_config(config)
@@ -129,10 +158,25 @@ def _validate_config(config: dict) -> None:
             f"Invalid 'retry.max_attempts': {max_attempts!r}. Must be an integer between 1 and 10."
         )
 
-    # Validate timeouts (> 0)
+    # Validate unified [llm] timeouts
     for key in ('worker_timeout_seconds', 'proofreading_timeout_seconds'):
-        val = config['gemini_cli'].get(key)
+        val = config['llm'].get(key)
         if not isinstance(val, (int, float)) or val <= 0:
             raise ValueError(
-                f"Invalid 'gemini_cli.{key}': {val!r}. Must be a positive number."
+                f"Invalid 'llm.{key}': {val!r}. Must be a positive number."
+            )
+
+    # Validate llm backend
+    backend = config['llm'].get('backend')
+    if backend not in ('gemini', 'ollama', 'qwen'):
+        raise ValueError(
+            f"Invalid 'llm.backend': {backend!r}. Must be 'gemini', 'qwen', or 'ollama'."
+        )
+
+    # Validate ollama model names (non-empty strings)
+    for stage in ('discovery', 'translation', 'proofreading', 'global_proofreading'):
+        val = config['llm']['models'].get(stage)
+        if not isinstance(val, str) or not val.strip():
+            raise ValueError(
+                f"Invalid 'llm.models.{stage}': {val!r}. Must be a non-empty string."
             )

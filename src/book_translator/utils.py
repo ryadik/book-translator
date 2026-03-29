@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -12,9 +13,13 @@ import json_repair
 
 _logger = logging.getLogger('system')
 
+# Matches any opening code fence: ```json, ```text, ```python, ``` etc.
+_CODE_FENCE_OPEN = re.compile(r'^```\w*\s*\n?', re.MULTILINE)
+_CODE_FENCE_CLOSE = re.compile(r'\n?```\s*$', re.MULTILINE)
+
 
 def strip_code_fence(text: str) -> str:
-    """Снимает markdown code fence с текста (```json ... ``` или ``` ... ```).
+    """Снимает markdown code fence с текста любого вида (```json, ```text, ``` и т.д.).
 
     Args:
         text: Сырой текст, возможно обёрнутый в code fence.
@@ -23,12 +28,8 @@ def strip_code_fence(text: str) -> str:
         Текст без code fence, обрезанный по пробелам.
     """
     text = text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    elif text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
+    text = _CODE_FENCE_OPEN.sub('', text, count=1)
+    text = _CODE_FENCE_CLOSE.sub('', text, count=1)
     return text.strip()
 
 
@@ -64,7 +65,7 @@ def parse_llm_json(raw: str) -> Any:
             raise ValueError(f"Не удалось распарсить JSON из ответа LLM: {e}\nОтвет: {raw[:200]!r}")
 
     # Обработка обёртки gemini-cli: {"response": "..."}
-    if isinstance(parsed, dict) and "response" in parsed and len(parsed) <= 3:
+    if isinstance(parsed, dict) and "response" in parsed and isinstance(parsed.get("response"), str):
         response_text = parsed["response"]
         if isinstance(response_text, str):
             if not response_text.strip():

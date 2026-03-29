@@ -1,50 +1,19 @@
-import sys
 from pathlib import Path
 from typing import Any
 from book_translator.logger import system_logger
-from book_translator import db
-from book_translator import glossary_manager
 from book_translator.utils import parse_llm_json
 
 
 def _parse_terms_from_data(data: Any) -> list[dict]:
     """Extract a flat list of {source, target, comment} dicts from parsed LLM output.
 
-    Accepts both the new flat array format and the old categorised dict format
-    (backward compatibility for cached responses).
+    Accepts only the flat array format: [{source, target, comment}, ...]
     """
     if isinstance(data, list):
-        # New format: [{source, target, comment}, ...]
         terms = []
         for item in data:
             if isinstance(item, dict) and item.get('source') and item.get('target'):
                 terms.append(item)
-        return terms
-
-    if isinstance(data, dict):
-        # Old format: {characters: {id: {source, target, comment}}, ...}
-        _LEGACY_CATEGORIES = {"characters", "terminology", "expressions"}
-        if not (data.keys() & _LEGACY_CATEGORIES):
-            return []
-        terms = []
-        for category, items in data.items():
-            if not isinstance(items, dict):
-                continue
-            for term_id, term_data in items.items():
-                if not isinstance(term_data, dict):
-                    continue
-                source = (term_data.get('source') or
-                          term_data.get('name', {}).get('source') or
-                          term_data.get('term_source') or
-                          term_data.get('term_jp') or
-                          term_id)
-                target = (term_data.get('target') or
-                          term_data.get('name', {}).get('target') or
-                          term_data.get('term_target') or
-                          term_data.get('term_ru', ''))
-                comment = term_data.get('comment') or term_data.get('description', '')
-                if source and target:
-                    terms.append({'source': source, 'target': target, 'comment': comment})
         return terms
 
     return []
@@ -92,27 +61,3 @@ def collect_terms_from_responses(raw_responses: list[str]) -> list[dict]:
     return unique_terms
 
 
-def approve_via_tsv(terms: list[dict], tsv_path: Path, glossary_db_path: Path,
-                    source_lang: str = 'ja', target_lang: str = 'ru'):
-    """Generate TSV → wait for user edit → import approved terms."""
-    term_list = [
-        {
-            'term_source': t.get('source', ''),
-            'term_target': t.get('target', ''),
-            'comment': t.get('comment', ''),
-        }
-        for t in terms
-        if t.get('source') and t.get('target')
-    ]
-
-    glossary_manager.generate_approval_tsv(term_list, tsv_path)
-    print(f"\n📝 Отредактируйте файл: {tsv_path}")
-    print("Удалите ненужные строки, исправьте переводы.")
-    if not sys.stdin.isatty():
-        raise RuntimeError(
-            f"Требуется интерактивное подтверждение терминов. "
-            f"TSV сохранён: {tsv_path}"
-        )
-    input("Нажмите Enter когда закончите...")
-    count = glossary_manager.import_tsv(glossary_db_path, tsv_path, source_lang, target_lang)
-    print(f"✅ Импортировано {count} терминов")

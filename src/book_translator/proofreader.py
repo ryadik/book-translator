@@ -19,6 +19,10 @@ def apply_diffs(
     skipped = 0
 
     for diff in diffs:
+        if not isinstance(diff, dict):
+            system_logger.warning(f"Invalid diff format (expected dict, got {type(diff).__name__}): {diff!r}")
+            skipped += 1
+            continue
         chunk_idx = diff.get("chunk_index")
         find_str = diff.get("find")
         replace_str = diff.get("replace")
@@ -27,6 +31,14 @@ def apply_diffs(
             system_logger.warning(f"Invalid diff format: {diff}")
             skipped += 1
             continue
+
+        if isinstance(chunk_idx, str):
+            try:
+                chunk_idx = int(chunk_idx)
+            except (ValueError, TypeError):
+                system_logger.warning(f"Chunk index invalid type: {chunk_idx!r}")
+                skipped += 1
+                continue
 
         if not isinstance(chunk_idx, int):
             system_logger.warning(f"Chunk index invalid type: {chunk_idx!r}")

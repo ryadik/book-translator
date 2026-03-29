@@ -2,6 +2,78 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v3.0.0] - 2026-03-30
+
+### Added
+- **Full TUI Application**: Complete Textual-based terminal user interface replacing the CLI-only workflow.
+- **Dashboard Screen**: Central hub for managing series, viewing translation progress, and launching operations.
+- **Interactive Glossary Management**: TUI screen for viewing, adding, editing, deleting, importing/exporting terms.
+- **Translation Progress Screen**: Real-time visualization of chapter translation status across all pipeline stages.
+- **Batch Translation Screen**: Interface for translating multiple chapters concurrently with progress tracking.
+- **Log Viewer**: Built-in screen for viewing application logs with filtering by level and worker (`log_viewer.py` module).
+- **Settings Screen**: Configure LLM backends, models, worker concurrency, and rate limits from the TUI.
+- **Prompts Screen**: View and manage custom prompt templates for each pipeline stage.
+- **Initialization Wizard**: Guided series setup with language selection and model configuration.
+- **Theme Support**: Dark/light theme toggle with persistent user preferences (saved to `~/.config/book-translator/tui.json`).
+- **Keyboard Shortcuts**: Comprehensive key bindings for efficient navigation and actions.
+- **Modal Dialogs**: Confirmation prompts, wait screens, and term approval workflows.
+- **Term Approval Workflow**: Interactive review of discovered terms before adding to glossary.
+- **Translation Options Screen**: Configure output format (DOCX/EPUB), chunking parameters per translation.
+- **Qwen Backend**: Third LLM backend (`qwen-code` CLI) alongside Gemini and Ollama (`run_qwen()` in `llm_runner.py`).
+- **Cancellation Support**: `CancellationError` exception and cancellation handling for all LLM backends.
+- **Stage-specific Temperature**: Per-stage temperature overrides via `llm.options.stage_temperature` config.
+- **Think Mode Control**: `llm.options.think` flag to disable Qwen3 thinking mode.
+- **Run Manifest**: Persisted translation run logs with worker state tracking (`update_run_manifest()`).
+- **Local Prompts**: Separate prompt variants for local LLMs in `data/prompts/local/`.
+- **Protocol-based UI**: `TranslationUI` protocol for UI backend abstraction in orchestrator.
+
+### Changed
+- **Entry Point**: `book-translator` command now launches TUI instead of running CLI commands directly.
+- **Architecture**: Shift from imperative CLI to event-driven TUI with screen-based navigation.
+- **User Interaction**: All user-facing prompts and confirmations now handled through TUI modals.
+- **Progress Reporting**: Real-time progress updates in TUI instead of console output.
+- **Configuration**: Runtime configuration changes possible through TUI settings screen.
+- **Error Display**: Errors shown in TUI notifications instead of stderr.
+- **Unified LLM Config**: All LLM backends configured via `[llm]` section (replaces `[gemini_cli]` timeouts).
+- **Backend-aware Timeouts**: Ollama gets longer timeouts (600s worker, 900s proofreading) vs cloud backends (120s/300s).
+- **Glossary Upsert**: `add_term()` uses `ON CONFLICT ... DO UPDATE` to preserve `id` and `created_at`.
+- **Chunk Upsert**: `add_chunk()` uses `ON CONFLICT ... DO UPDATE` to preserve `id`.
+- **Atomic Status Updates**: New `batch_update_chunk_statuses()` for transactional multi-chunk updates.
+- **Chapter Lock Logic**: Current process locks treated as stale (allows restart after crash).
+- **Prompt Templates**: Updated all prompts with `{target_lang_name}`, `{source_lang_name}` placeholders.
+- **Logger Module**: Enhanced `logger.py` with additional loggers and formatting.
+- **LLM Runner**: Major refactor of `llm_runner.py` with separate functions per backend, process tracking, cancellation.
+- **Orchestrator**: Protocol-based UI abstraction, improved concurrency, better error handling.
+- **Discovery**: Unified config loading with backend-aware defaults, stage temperature support.
+- **EPUB Conversion**: Updated to support language metadata parameter.
+- **Path Resolver**: Improved series root discovery and prompt resolution.
+- **Term Collector**: Modernized type hints, backward-compatible key handling.
+- **Proofreader**: Enhanced diff application logic.
+- **Glossary Manager**: Updated to use `term_source`/`term_target` keys with legacy fallback.
+- **DB Module**: Upsert semantics for terms and chunks, atomic batch operations.
+- **Exceptions**: Added `CancellationError` for user-initiated cancellation.
+- **Default Prompts**: New `default_prompts.py` module for bundled prompt loading.
+- **Chapter Splitter**: Improved chunking logic with configurable parameters.
+- **Utils**: Enhanced JSON parsing for LLM responses.
+
+### Removed
+- **CLI Subcommands**: `init`, `translate`, `translate-all`, `glossary`, `status` commands (replaced by TUI).
+- **Commands Package**: Entire `src/book_translator/commands/` directory removed.
+- **Rich Status TUI**: Replaced by full Textual application.
+- **Console-based Progress**: Replaced by TUI progress widgets.
+- **Old TUI Module**: `tui.py` removed, replaced by `textual_app/` package.
+- **All Tests**: Test files removed (to be rewritten for v3.0 architecture).
+- **Gemini-specific Config**: `[gemini_cli]` section deprecated in favor of unified `[llm]` config.
+- **Documentation**: Moved user-facing docs to `_deprecated_docs/` (to be rewritten).
+
+### Migration from v2.x
+- Launch `book-translator` to enter the TUI interface
+- Use keyboard shortcuts or mouse navigation to perform actions
+- All previous functionality available through TUI screens
+- Configuration files and database formats remain compatible
+- Update `book-translator.toml`: move `[gemini_cli]` timeouts to `[llm]` section if using custom values
+- Add `qwen` backend support: set `llm.backend = "qwen"` and configure `[llm.models]`
+
 ## [Unreleased]
 
 ### Added

@@ -72,9 +72,10 @@ def get_series_paths(series_root: Path, volume_name: str | None = None) -> Serie
     """Resolve series-level paths with optional volume-level context overrides.
 
     Resolution order for world_info.md and style_guide.md:
-    1. {volume_dir}/world_info.md  (if volume_name provided and file exists)
-    2. {series_root}/world_info.md (fallback)
-    3. None                        (if neither exists)
+    1. {volume_dir}/world_info.md          (if volume_name provided and file exists)
+    2. {series_root}/prompts/world_info.md (new preferred location)
+    3. {series_root}/world_info.md         (legacy fallback)
+    4. None                                (if none exist)
 
     Args:
         series_root: Path to series root directory
@@ -96,15 +97,21 @@ def get_series_paths(series_root: Path, volume_name: str | None = None) -> Serie
         if vol_sg.is_file():
             style_guide = vol_sg
 
-    # Fallback to series-level
+    # Fallback to series-level: prompts folder first, then root
     if world_info is None:
-        ser_wi = series_root / 'world_info.md'
-        if ser_wi.is_file():
-            world_info = ser_wi
+        prompts_wi = series_root / 'prompts' / 'world_info.md'
+        root_wi = series_root / 'world_info.md'
+        if prompts_wi.is_file():
+            world_info = prompts_wi
+        elif root_wi.is_file():
+            world_info = root_wi
     if style_guide is None:
-        ser_sg = series_root / 'style_guide.md'
-        if ser_sg.is_file():
-            style_guide = ser_sg
+        prompts_sg = series_root / 'prompts' / 'style_guide.md'
+        root_sg = series_root / 'style_guide.md'
+        if prompts_sg.is_file():
+            style_guide = prompts_sg
+        elif root_sg.is_file():
+            style_guide = root_sg
 
     return SeriesPaths(
         root=series_root,
@@ -149,26 +156,38 @@ def ensure_volume_dirs(volume_paths: VolumePaths) -> None:
     volume_paths.cache_dir.mkdir(parents=True, exist_ok=True)
 
 
-def resolve_prompt(series_root: Path, prompt_name: str, bundled_prompts: dict[str, str]) -> str:
-    """Resolve a prompt: series override → bundled default.
+def resolve_prompt(
+    series_root: Path,
+    prompt_name: str,
+    bundled_prompts: dict[str, str],
+    backend: str = "gemini",
+    local_prompts: dict[str, str] | None = None,
+) -> str:
+    """Resolve a prompt using priority: series override → backend default → cloud default.
 
-    Checks {series_root}/prompts/{prompt_name}.txt first.
-    Falls back to bundled_prompts dict.
+    Resolution order:
+    1. {series_root}/prompts/{prompt_name}.txt  — user override (applies to all backends)
+    2. local_prompts[prompt_name]               — bundled local prompt (when backend='ollama')
+    3. bundled_prompts[prompt_name]             — bundled cloud prompt (fallback)
 
     Args:
         series_root: Path to series root
         prompt_name: Prompt name without extension (e.g. 'translation')
-        bundled_prompts: Dict mapping prompt names to default content strings
+        bundled_prompts: Dict mapping prompt names to cloud prompt strings
+        backend: Active backend ('gemini' or 'ollama')
+        local_prompts: Dict mapping prompt names to local prompt strings (optional)
 
     Returns:
         Prompt content string
 
     Raises:
-        FileNotFoundError: if prompt not found in either location
+        FileNotFoundError: if prompt not found in any location
     """
     override_path = series_root / 'prompts' / f'{prompt_name}.txt'
     if override_path.is_file():
         return override_path.read_text(encoding='utf-8')
+    if backend == "ollama" and local_prompts and prompt_name in local_prompts:
+        return local_prompts[prompt_name]
     if prompt_name in bundled_prompts:
         return bundled_prompts[prompt_name]
     raise FileNotFoundError(

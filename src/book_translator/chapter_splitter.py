@@ -121,7 +121,16 @@ def split_chapter_intelligently(
                     current_chunk_lines = temp_lines
                     current_chunk_chars = sum(len(l) for l in current_chunk_lines)
                 else:
-                    write_part(force=True)
+                    # Last resort: no blank lines anywhere in buffer — split the
+                    # combined text at max_part_chars character boundary so we
+                    # never produce a chunk larger than max_part_chars.
+                    combined = "".join(current_chunk_lines)
+                    while len(combined) > max_part_chars:
+                        piece = combined[:max_part_chars]
+                        append_chunk(piece)
+                        combined = combined[max_part_chars:]
+                    current_chunk_lines = [combined] if combined else []
+                    current_chunk_chars = len(combined)
 
         i += 1
 
