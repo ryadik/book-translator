@@ -249,9 +249,68 @@ class DashboardScreen(Screen):
         def _on_options(options: dict | None) -> None:
             if options is None:
                 return  # user cancelled
-            self.app.push_screen(TranslationScreen(series_root, chapter_path, options))
+            if options.get("convert_only"):
+                txt_path = series_root / vol_name / "output" / f"{chapter_name}.txt"
+                if not txt_path.exists():
+                    self.notify(
+                        f"Переведённый файл не найден: {txt_path.name}",
+                        severity="error",
+                    )
+                    return
+                self.run_worker(
+                    lambda: self._run_conversion(txt_path, chapter_name, series_root, options),
+                    thread=True,
+                )
+            else:
+                self.app.push_screen(TranslationScreen(series_root, chapter_path, options))
 
         self.app.push_screen(TranslationOptionsModal(), _on_options)
+
+    def _run_conversion(
+        self,
+        txt_path: Path,
+        chapter_name: str,
+        series_root: Path,
+        options: dict,
+    ) -> None:
+        from book_translator import convert_to_docx, convert_to_epub, discovery
+
+        try:
+            config = discovery.load_series_config(series_root)
+            target_lang: str = config["series"]["target_lang"]
+        except Exception:
+            target_lang = "ru"
+
+        results: list[str] = []
+        errors: list[str] = []
+
+        if options.get("auto_docx"):
+            try:
+                out = txt_path.with_suffix(".docx")
+                convert_to_docx.convert_txt_to_docx(txt_path, out)
+                results.append(f".docx → {out.name}")
+            except Exception as exc:
+                errors.append(f".docx: {exc}")
+
+        if options.get("auto_epub"):
+            try:
+                out = txt_path.with_suffix(".epub")
+                convert_to_epub.convert_txt_to_epub(
+                    input_file=txt_path,
+                    output_file=out,
+                    title=chapter_name,
+                    language=target_lang,
+                )
+                results.append(f".epub → {out.name}")
+            except Exception as exc:
+                errors.append(f".epub: {exc}")
+
+        if results:
+            self.app.call_from_thread(
+                self.notify, "Готово: " + ", ".join(results), severity="information"
+            )
+        for err in errors:
+            self.app.call_from_thread(self.notify, f"Ошибка {err}", severity="error")
 
     def action_init_series(self) -> None:
         if self._has_series_config():

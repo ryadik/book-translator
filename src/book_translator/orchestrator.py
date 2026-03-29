@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from dataclasses import dataclass, field, replace as dc_replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from book_translator.logger import setup_loggers, system_logger
 from book_translator.log_viewer import update_run_manifest
@@ -25,6 +25,28 @@ from book_translator.rate_limiter import RateLimiter
 from book_translator.utils import parse_llm_json
 from book_translator.exceptions import TranslationLockedError, CancellationError
 from book_translator import llm_runner
+
+
+@runtime_checkable
+class TranslationUI(Protocol):
+    """Protocol that UI objects must satisfy to drive a translation run.
+
+    Both TextualBridge and _NullInteractions implement this contract.
+    Any new UI backend only needs to provide these three methods.
+    """
+
+    def progress(self, label: str, total: int) -> Any: ...  # context manager yielding a progress handle
+
+    def confirm(self, prompt: str, default: bool = False) -> bool: ...
+
+    def approve_terms(
+        self,
+        terms: list[dict],
+        tsv_path: Path,
+        glossary_db_path: Path,
+        source_lang: str,
+        target_lang: str,
+    ) -> int: ...
 
 
 class _NullProgressHandle:
@@ -96,7 +118,10 @@ def _acquire_chapter_lock(lock_file: Path, chapter_name: str, force: bool) -> di
         except FileExistsError:
             metadata = _read_lock_metadata(lock_file) or {}
             pid = metadata.get('pid')
-            if isinstance(pid, int) and _is_pid_alive(pid):
+            # Treat a lock from the current process as stale: it belongs to a
+            # previous orchestrator thread that was replaced (e.g. pause/resume).
+            # A foreign live process must still block.
+            if isinstance(pid, int) and _is_pid_alive(pid) and pid != os.getpid():
                 raise TranslationLockedError(
                     f"Обнаружена блокировка для главы '{chapter_name}' (PID {pid}). "
                     "Используйте `--force` для принудительного сброса."
@@ -126,11 +151,14 @@ def _cleanup_chapter_artifacts(volume_paths: Any, chapter_name: str) -> None:
 
 
 def _reset_in_progress_to_failed(chunks_db: Path, chapter_name: str) -> None:
-    """Reset any *_in_progress chunks to *_failed so next --resume can retry them."""
-    for chunk in db.get_chunks(chunks_db, chapter_name):
-        if chunk['status'].endswith('_in_progress'):
-            new_status = chunk['status'].replace('_in_progress', '_failed')
-            db.update_chunk_status(chunks_db, chapter_name, chunk['chunk_index'], new_status)
+    """Atomically reset any *_in_progress chunks to *_failed for next --resume."""
+    updates = [
+        (chunk['chunk_index'], chunk['status'].replace('_in_progress', '_failed'))
+        for chunk in db.get_chunks(chunks_db, chapter_name)
+        if chunk['status'].endswith('_in_progress')
+    ]
+    if updates:
+        db.batch_update_chunk_statuses(chunks_db, chapter_name, updates)
 
 
 def _is_pid_alive(pid: int) -> bool:
@@ -237,6 +265,9 @@ def _run_single_worker(
 
         return True
 
+    except CancellationError:
+        # Propagate cancellation — do not mark as failed, do not swallow.
+        raise
     except Exception as e:
         system_logger.critical(f"[Orchestrator] КРИТИЧЕСКАЯ ОШИБКА при запуске воркера [id: {worker_id}] для chunk_{chunk_index}: {e}", exc_info=True)
         db.update_chunk_status(config.chunks_db, config.chapter_name, chunk_index, f"{step_name}_failed")
@@ -297,6 +328,12 @@ def _run_global_proofreading(
             system_logger.warning(f"[Orchestrator] Глобальная вычитка вернула не список. Пропуск. Ответ: {stdout[:200]}")
             return chunks, False
 
+        # Unwrap [[{...}]] → [{...}]: json_repair sometimes wraps a list in another list
+        # when the model includes extra text around the JSON.
+        if diffs and isinstance(diffs[0], list):
+            diffs = [item for sublist in diffs for item in sublist if isinstance(item, dict)]
+            system_logger.warning("[Orchestrator] Глобальная вычитка вернула вложенный список — выполнена распаковка.")
+
         system_logger.info(f"[Orchestrator] Получено {len(diffs)} правок от глобальной вычитки.")
         updated_chunks, applied, skipped = proofreader.apply_diffs(chunks, diffs)
         system_logger.info(f"[Orchestrator] Правки применены: {applied}, пропущено: {skipped}.")
@@ -326,8 +363,10 @@ def _run_workers_pooled(
     step_name: str,
     config: WorkerConfig,
     contexts: dict[int, str] | None = None,
-    ui=None,
+    ui: TranslationUI | None = None,
 ):
+    if ui is None:
+        ui = _NullInteractions()
     all_successful = True
     total_tasks = len(chunks)
     completed_tasks_count = 0
@@ -544,12 +583,16 @@ def run_translation_process(
         system_logger.info(f"[Orchestrator] Рабочая директория для главы '{chapter_name}' заблокирована.")
 
         if resume:
-            # Reset stalled tasks
+            # Atomically reset all stalled/failed chunks back to their pending state.
             chunks = db.get_chunks(chunks_db, chapter_name)
+            resume_updates = []
             for chunk in chunks:
-                if chunk['status'].endswith('_in_progress') or chunk['status'].endswith('_failed'):
-                    new_status = chunk['status'].replace('_in_progress', '_pending').replace('_failed', '_pending')
-                    db.update_chunk_status(chunks_db, chapter_name, chunk['chunk_index'], new_status)
+                s = chunk['status']
+                if s.endswith('_in_progress') or s.endswith('_failed'):
+                    new_status = s.replace('_in_progress', '_pending').replace('_failed', '_pending')
+                    resume_updates.append((chunk['chunk_index'], new_status))
+            if resume_updates:
+                db.batch_update_chunk_statuses(chunks_db, chapter_name, resume_updates)
 
         # --- Этап 0: Разделение на чанки ---
         chunks = db.get_chunks(chunks_db, chapter_name)

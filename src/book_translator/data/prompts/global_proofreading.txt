@@ -58,6 +58,7 @@ Rules for diffs:
 3. No leading or trailing whitespace in `find` unless required for uniqueness.
 4. If no corrections needed, return an empty array: []
 5. Output ONLY the JSON array. No markdown formatting or explanations.
+6. CRITICAL — CHARACTER FIDELITY: Copy `find` character-for-character from content_target. Do NOT substitute or normalise punctuation: hyphen-minus U+002D `-`, en-dash U+2013 `–`, em-dash U+2014 `—`, and box-drawing dash U+2500 `─` are four distinct characters. If the source text contains `-`, your `find` must also contain `-`, not `–` or `—`. Any character substitution will cause the diff to be silently rejected.
 
 Example:
 [
